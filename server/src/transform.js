@@ -33,10 +33,8 @@ export class LineIndex {
     }
 }
 
-// Every scanner below treats string literals as atomic: their contents must
-// never trip the bracket/comma/arrow logic. s[i] must be the opening quote;
-// returns the index just past the closing quote (or end of input if
-// unclosed). Backslash escapes are honored.
+// s[i] must be the opening quote; returns the index just past the closing
+// quote (or end of input if unclosed). Backslash escapes are honored.
 const isQuote = c => c === "'" || c === '"' || c === '`';
 function skipString(s, i) {
     const q = s[i]; i++;
@@ -48,6 +46,29 @@ function skipString(s, i) {
     return i;
 }
 
+// THE tokenizer shared by every depth-aware scanner below. Yields string
+// literals as atomic spans (their contents must never trip bracket/comma
+// logic), '=>' as a single arrow token (its '>' must not unbalance generic
+// depth), and every other character individually. Scanners keep their own
+// depth rules but cannot drift on skip discipline — the drift bug this
+// prevents was real (extractParamList once tracked only '()').
+function* scan(s, i = 0) {
+    while (i < s.length) {
+        const c = s[i];
+        if (isQuote(c)) {
+            const end = skipString(s, i);
+            yield { type: 'string', start: i, end };
+            i = end;
+        } else if (c === '=' && s[i + 1] === '>') {
+            yield { type: 'arrow', start: i, end: i + 2 };
+            i += 2;
+        } else {
+            yield { type: 'char', i, c };
+            i++;
+        }
+    }
+}
+
 // The {} disambiguation rule (spec, Annotation Syntax): a `{` immediately
 // after a type identifier is a generic (Map{string} -> Map<string>); a `{`
 // whose matching `}` is immediately followed by `(` is a generic parameter
@@ -55,50 +76,47 @@ function skipString(s, i) {
 // verbatim. A stack matches closers to openers so nesting converts correctly;
 // string literals are copied untouched.
 export function convertGenerics(input) {
-    const isIdent = c => /[A-Za-z0-9_$]/.test(c);
+    // Unicode-aware: type names like Бокс are identifiers too (JS allows
+    // them), so ASCII-only \w would silently demote Бокс{string} to an
+    // object type.
+    const isIdent = c => /[\p{L}\p{N}_$]/u.test(c);
 
     // Does the {…} starting at openIdx close with a '(' immediately after?
     const closesBeforeParen = (s, openIdx) => {
-        let depth = 0, i = openIdx;
-        while (i < s.length) {
-            const c = s[i];
-            if (isQuote(c)) { i = skipString(s, i); continue; }
-            if (c === '{') depth++;
-            else if (c === '}' && --depth === 0) {
-                let j = i + 1; while (j < s.length && /\s/.test(s[j])) j++;
+        let depth = 0;
+        for (const t of scan(s, openIdx)) {
+            if (t.type !== 'char') continue;
+            if (t.c === '{') depth++;
+            else if (t.c === '}' && --depth === 0) {
+                let j = t.i + 1; while (j < s.length && /\s/.test(s[j])) j++;
                 return s[j] === '(';
             }
-            i++;
         }
         return false;
     };
 
-    let out = '', i = 0;
+    let out = '';
     const stack = []; // 'generic' | 'object'
-    while (i < input.length) {
-        const c = input[i];
-        if (isQuote(c)) {                                               // copy strings verbatim
-            const end = skipString(input, i);
-            out += input.slice(i, end);
-            i = end;
+    for (const t of scan(input)) {
+        if (t.type !== 'char') {                       // strings and '=>' copy verbatim
+            out += input.slice(t.start, t.end);
             continue;
         }
+        const c = t.c;
         if (c === '{') {
             // #9 fix: check the IMMEDIATE predecessor, not the last non-space
             // char — a space before `{` makes it an object type, so
             // `Map {string}` must NOT be read as a generic. out's last char
-            // equals input[i-1] (non-brace chars are copied verbatim).
+            // equals input[t.i - 1] (non-brace chars are copied verbatim).
             const prevChar = out[out.length - 1];
-            const kind = (prevChar && isIdent(prevChar)) || closesBeforeParen(input, i) ? 'generic' : 'object';
+            const kind = (prevChar && isIdent(prevChar)) || closesBeforeParen(input, t.i) ? 'generic' : 'object';
             stack.push(kind);
             out += kind === 'generic' ? '<' : '{';
-            i++; continue;
-        }
-        if (c === '}') {
+        } else if (c === '}') {
             out += (stack.pop() ?? 'object') === 'generic' ? '>' : '}';
-            i++; continue;
+        } else {
+            out += c;
         }
-        out += c; i++;
     }
     return out;
 }
@@ -107,15 +125,13 @@ export function convertGenerics(input) {
 // Runs after convertGenerics, so <> are generic delimiters; '=>' is skipped
 // so its '>' doesn't unbalance the depth counter.
 export function splitTopLevel(s) {
-    const parts = []; let depth = 0, start = 0, i = 0;
-    while (i < s.length) {
-        const c = s[i];
-        if (isQuote(c)) { i = skipString(s, i); continue; }
-        if (c === '=' && s[i + 1] === '>') { i += 2; continue; }    // arrow, not a bracket
+    const parts = []; let depth = 0, start = 0;
+    for (const t of scan(s)) {
+        if (t.type !== 'char') continue;               // strings and '=>' are not structure
+        const c = t.c;
         if ('([<{'.includes(c)) depth++;
         else if (')]>}'.includes(c)) depth--;
-        else if (c === ',' && depth === 0) { parts.push(s.slice(start, i).trim()); start = i + 1; }
-        i++;
+        else if (c === ',' && depth === 0) { parts.push(s.slice(start, t.i).trim()); start = t.i + 1; }
     }
     const last = s.slice(start).trim();
     if (last) parts.push(last);
@@ -129,13 +145,12 @@ export function splitTopLevel(s) {
 // <T extends () => void>(x: T) => T, be mistaken for the parameter list via
 // the '()' inside the constraint.
 export function extractParamList(s) {
-    let depth = 0, i = 0, open = -1;
-    while (i < s.length) {
-        const c = s[i];
-        if (isQuote(c)) { i = skipString(s, i); continue; }
-        if (c === '=' && s[i + 1] === '>') { i += 2; continue; }
+    let depth = 0, open = -1;
+    for (const t of scan(s)) {
+        if (t.type !== 'char') continue;
+        const c = t.c;
         if ('([<{'.includes(c)) {
-            if (c === '(' && depth === 0 && open === -1) open = i;
+            if (c === '(' && depth === 0 && open === -1) open = t.i;
             depth++;
         } else if (')]>}'.includes(c)) {
             depth--;
@@ -143,14 +158,13 @@ export function extractParamList(s) {
                 // A top-level (...) group is the parameter list ONLY if it is
                 // immediately followed by '=>'. Otherwise it is a grouped or
                 // return type (e.g. "((string) => void)"); reset, keep scanning.
-                let j = i + 1; while (j < s.length && /\s/.test(s[j])) j++;
+                let j = t.i + 1; while (j < s.length && /\s/.test(s[j])) j++;
                 if (s[j] === '=' && s[j + 1] === '>') {
-                    return { before: s.slice(0, open), inner: s.slice(open + 1, i), after: s.slice(i + 1) };
+                    return { before: s.slice(0, open), inner: s.slice(open + 1, t.i), after: s.slice(t.i + 1) };
                 }
                 open = -1;
             }
         }
-        i++;
     }
     return null;
 }
@@ -159,6 +173,12 @@ export function extractParamList(s) {
 // signatures inside @type, so no @param/@returns generation is needed in v1.
 // The one exception is a class, whose {T} payload becomes @template.
 export function toJsDocType(ety, kind) {
+    // Step 0: a raw */ in the payload would terminate the injected
+    // /** … */ mid-line and dump the rest into the virtual doc as code.
+    // Neutralize it — the type is still wrong, so TS reports an error that
+    // the handlers remap onto the // T: comment the user can actually edit.
+    ety = ety.replaceAll('*/', '* /');
+
     // Step 1: class-level generic params -> @template (NOT @type). A
     // standalone {T} is classified as an OBJECT by convertGenerics (no
     // preceding identifier, no trailing paren), so routing a class through
@@ -183,14 +203,13 @@ export function toJsDocType(ety, kind) {
     // constraint like <T extends () => void> doesn't miscount.
     let s = angleFixed.trim();
     if (s.startsWith('<')) {
-        let depth = 0, k = 0;
-        for (; k < s.length; k++) {
-            if (isQuote(s[k])) { k = skipString(s, k) - 1; continue; }
-            if (s[k] === '=' && s[k + 1] === '>') { k++; continue; }
-            if (s[k] === '<') depth++;
-            else if (s[k] === '>') { if (--depth === 0) { k++; break; } }
+        let depth = 0, end = s.length;
+        for (const t of scan(s)) {
+            if (t.type !== 'char') continue;
+            if (t.c === '<') depth++;
+            else if (t.c === '>' && --depth === 0) { end = t.i + 1; break; }
         }
-        s = s.slice(k).trim();
+        s = s.slice(end).trim();
     }
     if (!s.startsWith('(') && !s.startsWith('new (')) {
         return `/** @type {${angleFixed}} */`;
@@ -206,13 +225,11 @@ export function toJsDocType(ety, kind) {
         // a name separator, so the ':' inside an object type or a nested
         // function type does not trigger; strings and '=>' are skipped.
         let depth = 0, hasName = false;
-        for (let k = 0; k < p.length; k++) {
-            const c = p[k];
-            if (isQuote(c)) { k = skipString(p, k) - 1; continue; }
-            if (c === '=' && p[k + 1] === '>') { k++; continue; }
-            if ('<({['.includes(c)) depth++;
-            else if (')}]>'.includes(c)) depth--;
-            else if (c === ':' && depth === 0) { hasName = true; break; }
+        for (const t of scan(p)) {
+            if (t.type !== 'char') continue;
+            if ('<({['.includes(t.c)) depth++;
+            else if (')}]>'.includes(t.c)) depth--;
+            else if (t.c === ':' && depth === 0) { hasName = true; break; }
         }
         if (hasName) return p; // already named, e.g. "role?: Role"
 
