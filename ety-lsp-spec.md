@@ -61,13 +61,15 @@ v1 is deliberately narrow: it delivers **type checking, hover, and diagnostics f
 
 Because object types also use braces (`{ id: string }`), `{}` is overloaded. A single rule resolves it, and it is the one rule users must not violate:
 
-- **Postfix args** — a `{` *immediately following a type identifier with no space* is a generic: `Map{string, User}`, `Box{T}`, `Promise{T}`.
+- **Postfix args** — a `{` *immediately following a type identifier with no space* is a generic: `Map{string, User}`, `Box{T}`, `Promise{T}`. "Identifier" is unicode-aware (`\p{L}\p{N}_$`), matching JavaScript itself: `Бокс{string}` is a generic, same as the ASCII case.
 - **Prefix type-parameter list** — a `{` whose matching `}` is *immediately followed by `(`* is a generic parameter declaration: `{T}(T[]) => T[]`.
 - **Everything else** — a standalone `{` (after `=`, `,`, `:`, `=>`, or at the start with no trailing `(`) is an **object type** and is preserved verbatim.
 
 Closing braces are matched to their opener with a stack, so nesting converts correctly: `Map{string, {id: string}}` → `Map<string, {id: string}>`.
 
 > **The one constraint:** never put a space between a type name and its generic arguments. `Map{string}` is a generic; `Map {string}` would be read as the identifier `Map` followed by an object type. The conversion logic lives in `convertGenerics` (Phase 2).
+
+> **Payloads can never close the injected comment.** Phase 2 wraps every payload in `/** … */`, so a literal `*/` inside a payload would terminate that comment mid-line and dump the remainder into the virtual document as code — corrupting offsets for everything below. `toJsDocType` therefore neutralizes `*/` to `* /` before emitting. The type is still invalid, so TypeScript reports an error that diagnostics remapping places on the `// T:` comment itself: a hostile payload degrades to a visible squiggle on the annotation, never to a corrupted virtual document.
 
 ### Placement Rules
 
