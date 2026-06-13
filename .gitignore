@@ -7,4 +7,5 @@ target/
 *.node
 .vscode-test/
 dist/
+locals/
 .DS_Store
