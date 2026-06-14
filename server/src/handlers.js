@@ -14,7 +14,16 @@ import { tsCategoryToSeverity } from './tsHost.js';
 export const DEBOUNCE_MS = 200;
 
 export function uriToPath(uri) {
-    return uri.startsWith('file://') ? fileURLToPath(uri) : uri;
+    if (uri.startsWith('file://')) return fileURLToPath(uri);
+    // Unsaved buffers have no disk path: their URI is `untitled:Untitled-1`.
+    // Passing that to the TS language service as a file name throws "Could not
+    // find source file" — the colon breaks path normalization, and the missing
+    // extension leaves the ScriptKind unknown. Synthesize a stable, sanitized
+    // .jsx name instead: .jsx is a superset of .js, so it classifies plain JS
+    // and JSX alike and still honors // T: JSDoc. The original URI is what we
+    // publish diagnostics against (kept in lineMaps.uri); this is only the key.
+    if (uri.startsWith('untitled:')) return uri.replace(/[^a-zA-Z0-9._-]/g, '_') + '.jsx';
+    return uri;
 }
 
 export function createState() {

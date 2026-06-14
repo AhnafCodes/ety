@@ -152,11 +152,32 @@ extension loaded against `fixtures/workspace/` and asserts hover and diagnostics
 npm install && npm run build:parser && npm run test:e2e
 ```
 
-For an interactive session, add a `.vscode/launch.json` with a `"Run Extension"`
-configuration (`extensionDevelopmentPath` pointing at `client/`), press
-<kbd>F5</kbd>, then open any `.js`/`.jsx` file in the dev host: add a `// T:`
-annotation and introduce a type error — it squiggles on the right line, and
-hovering an annotated symbol shows its type.
+### Interactive session
+
+For a hands-on session, the repo ships a `.vscode/launch.json` with a
+`"Run Extension"` configuration (`extensionDevelopmentPath` → `client/`,
+pre-opening `fixtures/workspace/`). Open the repo root in VS Code and press
+<kbd>F5</kbd> — a second **[Extension Development Host]** window opens with the
+extension loaded and the server running. Unlike `test:e2e`, this window stays
+open: open any `.js`/`.jsx` file, add a `// T:` annotation and introduce a type
+error — it squiggles on the right line, and hovering an annotated symbol shows
+its type.
+
+```bash
+npm install && npm run build:parser   # one-time: the addon must exist first
+code .                                 # open the repo root, then press F5
+```
+
+No file to spare? A scratch buffer works too: <kbd>Cmd/Ctrl+N</kbd>, set the
+language to **JavaScript** (status bar, bottom-right — unsaved buffers start as
+plaintext), and type. The extension attaches to `untitled:` buffers as well as
+saved files, so `let test = 1 // T: number` then `test = "hello"` squiggles
+without ever hitting disk.
+
+Edited `client/` or `server/` code? Reload the dev host with <kbd>Cmd/Ctrl+R</kbd>.
+Breakpoints work in both the client and the forked server process. One gotcha:
+imported files must be **open** for their types to resolve (see v1 limitations),
+so if a hover comes up empty, open the file the type is declared in.
 
 ## v1 limitations
 

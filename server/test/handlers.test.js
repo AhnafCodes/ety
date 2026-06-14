@@ -18,9 +18,14 @@ describe('uriToPath', () => {
         expect(uriToPath('file:///Users/me/my%20proj/main.js')).toBe('/Users/me/my proj/main.js');
     });
 
-    it('passes plain paths and non-file schemes through unchanged', () => {
+    it('passes plain paths and unknown schemes through unchanged', () => {
         expect(uriToPath('/already/a/path.js')).toBe('/already/a/path.js');
-        expect(uriToPath('untitled:Untitled-1')).toBe('untitled:Untitled-1');
+    });
+
+    it('maps untitled buffers to a sanitized .jsx name (TS rejects the raw colon URI)', () => {
+        // A bare `untitled:Untitled-1` makes the language service throw
+        // "Could not find source file"; .jsx classifies JS and JSX alike.
+        expect(uriToPath('untitled:Untitled-1')).toBe('untitled_Untitled-1.jsx');
     });
 });
 

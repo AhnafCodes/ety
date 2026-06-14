@@ -26,6 +26,12 @@ function activate() {
             documentSelector: [
                 { scheme: 'file', language: 'javascript' },
                 { scheme: 'file', language: 'javascriptreact' }, // .jsx — {} generics exist to avoid JSX conflicts
+                // Unsaved buffers (Cmd+N then "JavaScript") have the `untitled`
+                // scheme, not `file`. Match them too so a fresh scratch buffer
+                // squiggles without forcing a save first; the server keys them
+                // by a synthetic .jsx path (see uriToPath).
+                { scheme: 'untitled', language: 'javascript' },
+                { scheme: 'untitled', language: 'javascriptreact' },
             ],
         }
     );
