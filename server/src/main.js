@@ -13,7 +13,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { parse_ety } from './parser.js';
 import { createTsService } from './tsHost.js';
-import { createState, processDocument, onHover, onDidClose, uriToPath } from './handlers.js';
+import { createState, processDocument, onHover, onCompletion, onDidClose, uriToPath } from './handlers.js';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -31,9 +31,15 @@ connection.onInitialize(params => {
         capabilities: {
             textDocumentSync: TextDocumentSyncKind.Incremental,
             hoverProvider: true,
-            // completionProvider is intentionally NOT declared — completion on
-            // a // T: line lands inside comment trivia in the virtual document
-            // and returns nothing (spec: "Deferred: Autocompletion", v2).
+            // Inference-driven base-type completion (Milestone 9): we offer a
+            // primitive type name when the cursor sits in a // T: payload over a
+            // binding whose initializer infers to a primitive. Triggered on ':'
+            // (the // T: marker) so the editor asks us as the user starts typing
+            // the type. This is NOT the deferred general type-name completion
+            // (spec: "Deferred: Autocompletion") — that one needs intra-line
+            // spoofing into the JSDoc block; this one reads an already-inferred
+            // type and returns a whole token.
+            completionProvider: { triggerCharacters: [':'] },
             //
             // diagnosticsProvider is NOT declared either: diagnostics use the
             // push model via connection.sendDiagnostics.
@@ -46,6 +52,7 @@ connection.onInitialize(params => {
 documents.onDidChangeContent(({ document }) => processDocument(state, deps, document));
 documents.onDidClose(({ document }) => onDidClose(state, deps, document));
 connection.onHover(params => onHover(state, deps, params));
+connection.onCompletion(params => onCompletion(state, deps, params));
 
 documents.listen(connection);
 connection.listen();

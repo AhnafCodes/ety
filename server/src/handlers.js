@@ -7,11 +7,18 @@
 // them against the real disk — 'file:///dir/types.js' never exists there.
 // The original URI is kept inside the lineMaps entry for publishing.
 import ts from 'typescript';
+import { CompletionItemKind } from 'vscode-languageserver';
 import { fileURLToPath } from 'node:url';
 import { LineIndex, transformDocument } from './transform.js';
 import { tsCategoryToSeverity } from './tsHost.js';
 
 export const DEBOUNCE_MS = 200;
+
+// The closed set this milestone offers — primitives only. The instant an
+// inferred type falls outside it, completion stays silent: that boundary is
+// what keeps this a sliver and out of the deferred general-completion problem
+// (implementation-plan.md, Milestone 9).
+const BASE_TYPES = new Set(['string', 'number', 'boolean', 'undefined']);
 
 export function uriToPath(uri) {
     if (uri.startsWith('file://')) return fileURLToPath(uri);
@@ -146,6 +153,69 @@ export function onHover(state, deps, { textDocument, position }) {
             end:   { line: vToO.get(vEnd.line)   ?? vEnd.line,   character: vEnd.character },
         },
     };
+}
+
+// Completion requests arrive in ORIGINAL coordinates. We offer exactly one kind
+// of suggestion: when the cursor sits inside a `// T:` payload and the governed
+// binding's inferred type is a primitive, suggest that primitive.
+//
+// The empty `// T:` the user is mid-typing renders `/** @type {} */`, which
+// degrades the BINDING to `any` in the virtual doc (measured). So we never read
+// the binding's type — we read the INITIALIZER expression's type, which the
+// empty annotation does not touch, and widen its literal (0 -> number). Anything
+// outside BASE_TYPES yields nothing: this is deliberately a sliver, not general
+// completion (implementation-plan.md, Milestone 9).
+export function onCompletion(state, deps, { textDocument, position }) {
+    const path = uriToPath(textDocument.uri);
+    const entry = state.lineMaps.get(path);
+    if (!entry) return []; // not yet processed, or closed (race guard)
+    const { oToV, lineKind, lineIndex } = entry;
+
+    // Position guard: the cursor must sit inside the editable `// T:` span. The
+    // injected jsdoc/import line for this original line carries that span as
+    // commentRange (original coordinates), so a cursor on the code — or on any
+    // other line — is excluded.
+    const inPayload = [...lineKind.values()].some(k =>
+        k.commentRange
+        && k.commentRange.start.line === position.line
+        && position.character >= k.commentRange.start.character
+        && position.character <= k.commentRange.end.character);
+    if (!inPayload) return [];
+
+    const virtualLine = oToV.get(position.line);
+    if (virtualLine === undefined) return [];
+
+    // Stubbed services in unit tests don't expose getProgram; only the real TS
+    // host can answer inference, which is exactly what this feature needs.
+    const program = deps.tsService.getProgram?.();
+    const sourceFile = program?.getSourceFile(path);
+    if (!sourceFile) return [];
+    const checker = program.getTypeChecker();
+
+    // The binding governed by this annotation lives on the cursor's virtual code
+    // line. Find that VariableDeclaration and read its initializer's widened
+    // type — the empty `@type {}` poisons the binding, never the initializer.
+    const lineStart = lineIndex.getOffset(virtualLine, 0);
+    const nextStart = lineIndex.lineStarts[virtualLine + 1];
+    const lineEnd = nextStart ?? Number.MAX_SAFE_INTEGER;
+
+    let inferred;
+    const visit = node => {
+        if (inferred !== undefined) return;
+        if (ts.isVariableDeclaration(node) && node.initializer) {
+            const nameStart = node.name.getStart(sourceFile);
+            if (nameStart >= lineStart && nameStart < lineEnd) {
+                const literal = checker.getTypeAtLocation(node.initializer);
+                inferred = checker.typeToString(checker.getBaseTypeOfLiteralType(literal));
+                return;
+            }
+        }
+        ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+
+    if (inferred === undefined || !BASE_TYPES.has(inferred)) return [];
+    return [{ label: inferred, kind: CompletionItemKind.Keyword }];
 }
 
 // Prevent unbounded growth: drop all per-document state on close, cancel any
