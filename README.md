@@ -1,6 +1,6 @@
 # ety
 
-**Types in comments for plain JavaScript.** Write ordinary `.js`/`.jsx` — no build step, no `.ts` files — and put your types in `// T:` comments. ety is a language server that gives you TypeScript's diagnostics and hovers on top of untouched JavaScript source.
+**Types in comments for plain JavaScript.** Write ordinary `.js`/`.jsx` — no build step, no `.ts` files — and put your types in `// T:` comments. ety is a language server that gives you Type(TypeScript's) diagnostics and hovers on top of untouched JavaScript source.
 
 ```javascript
 let count = 0;               // T: number
@@ -16,7 +16,7 @@ function createUser(name, role) {
 
 `count = "oops"` now squiggles. Hovering `createUser` shows the full signature. The file on disk stays plain JavaScript that runs anywhere.
 
-## Why? ety
+## Why? ety - EcmaScript Type Comments.
 
 Ety is inspired from Python's Type Comments, a Hidden GEM(first form of hinting was the type comment (PEP 484)).
 
