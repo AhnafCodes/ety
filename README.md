@@ -16,6 +16,13 @@ function createUser(name, role) {
 
 `count = "oops"` now squiggles. Hovering `createUser` shows the full signature. The file on disk stays plain JavaScript that runs anywhere.
 
+## Why? ety
+
+Ety is inspired from Python's Type Comments, a Hidden GEM(first form of hinting was the type comment (PEP 484)).
+
+<img width="1408" height="768" alt="Gemini_Generated_Image_mis8okmis8okmis8" src="https://github.com/user-attachments/assets/9f73f17b-9245-4ab2-8b29-dee3d838e0ab" />
+
+
 ## How it works
 
 ety never rewrites your file. It builds a **virtual document** by inserting JSDoc lines above your annotations, hands that to the TypeScript Language Service, and maps the results back to your real source.
