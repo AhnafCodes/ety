@@ -9,3 +9,6 @@ target/
 dist/
 locals/
 .DS_Store
+# JetBrains plugin (Gradle) build output
+client-jetbrains/build/
+client-jetbrains/.gradle/

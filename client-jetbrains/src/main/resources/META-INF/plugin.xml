@@ -1,0 +1,32 @@
+<idea-plugin>
+    <id>dev.ety.jetbrains</id>
+    <name>ety Language Server</name>
+    <vendor>ety</vendor>
+
+    <description><![CDATA[
+        Types in comments for plain JavaScript. Provides TypeScript-grade
+        diagnostics and hovers for <code>// T:</code> annotations in untouched
+        <code>.js</code>/<code>.jsx</code> files, by driving the ety language
+        server over LSP. No build step, no <code>.ts</code> files.
+    ]]></description>
+
+    <!-- Core platform. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- The LSP API module. Required to use com.intellij.platform.lsp.* . -->
+    <depends>com.intellij.modules.lsp</depends>
+
+    <!--
+      The LSP implementation is closed-source and lives in the commercial
+      binary, so this dependency is still declared. Under the 2025.3 unified
+      distribution that binary is what EVERY user installs and the LSP API is
+      enabled for the free tier too — so this no longer excludes anyone
+      (implementation-plan.md, Milestone 7 context; verified Sep/Dec 2025).
+    -->
+    <depends>com.intellij.modules.ultimate</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <platform.lsp.serverSupportProvider
+            implementation="dev.ety.EtyLspServerSupportProvider"/>
+    </extensions>
+</idea-plugin>

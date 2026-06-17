@@ -27,6 +27,23 @@ describe('uriToPath', () => {
         // "Could not find source file"; .jsx classifies JS and JSX alike.
         expect(uriToPath('untitled:Untitled-1')).toBe('untitled_Untitled-1.jsx');
     });
+
+    // ── JetBrains client (Milestone 7) ──────────────────────────────────────
+    // JetBrains has no `untitled:` scheme. Its closest analog to a VS Code
+    // unsaved buffer is a Scratch file — but that is a REAL file on disk (under
+    // the IDE config dir), so it arrives as a normal file:// URI with a real
+    // extension and flows through the file:// branch unchanged. No synthetic
+    // name is needed; this row pins that cross-editor difference so nobody
+    // "adds untitled handling" for JetBrains where none is required.
+    it('maps a JetBrains scratch file:// URI to its real disk path (no synthesis needed)', () => {
+        // Note the percent-encoded space in "Application Support" — fileURLToPath
+        // decodes it, same as any workspace path with spaces.
+        const uri = 'file:///Users/me/Library/Application%20Support/JetBrains/'
+            + 'IntelliJIdea2025.3/scratches/scratch_1.js';
+        expect(uriToPath(uri)).toBe(
+            '/Users/me/Library/Application Support/JetBrains/IntelliJIdea2025.3/scratches/scratch_1.js'
+        );
+    });
 });
 
 // Hand-built synthetic state for one document:
