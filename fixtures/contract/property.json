@@ -9,7 +9,8 @@
       "etyEndOffset": 30,
       "kind": "property",
       "name": "value",
-      "ety": "T"
+      "ety": "T",
+      "doc": ""
     }
   ]
 }

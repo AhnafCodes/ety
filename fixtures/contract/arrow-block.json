@@ -9,7 +9,8 @@
       "etyEndOffset": 47,
       "kind": "function",
       "name": "",
-      "ety": "(number) => number"
+      "ety": "(number) => number",
+      "doc": ""
     }
   ]
 }

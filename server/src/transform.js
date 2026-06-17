@@ -269,6 +269,30 @@ export function toJsDocType(ety, kind) {
     return `/** @type {${pl.before}(${named})${pl.after}} */`;
 }
 
+// Assemble per-parameter annotations (kind 'param'/'return', all owned by one
+// function) into a single multi-line @param/@returns JSDoc block — an injection
+// unit. Each line carries the commentRange of the // T: it came from, so a bad
+// param type underlines THAT param's comment. Param types and the return type
+// run through convertGenerics (so Box{T} etc. still work); names pass verbatim.
+export function buildParamUnit(group) {
+    const neutralize = s => s.replaceAll('*/', '* /'); // never terminate the block early
+    const params = group.filter(a => a.kind === 'param').sort((a, b) => a.etyStartOffset - b.etyStartOffset);
+    const ret = group.find(a => a.kind === 'return');
+
+    const lines = [{ text: '/**', commentRange: (params[0] ?? ret).commentRange }];
+    for (const p of params) {
+        const ty = neutralize(convertGenerics(p.ety));
+        const doc = p.doc ? ` ${neutralize(p.doc)}` : '';
+        lines.push({ text: ` * @param {${ty}} ${p.name}${doc}`, commentRange: p.commentRange });
+    }
+    if (ret) {
+        lines.push({ text: ` * @returns {${neutralize(convertGenerics(ret.ety))}}`, commentRange: ret.commentRange });
+    }
+    lines.push({ text: ' */', commentRange: (ret ?? params[params.length - 1]).commentRange });
+
+    return { originalLine: group[0].originalLine, lines };
+}
+
 // Build the virtual document (strictly additive overlay) and the line maps.
 // Insertions are always FULL lines — JSDoc above annotated nodes, hoisted
 // imports at the top — so character offsets within any code line are
@@ -325,11 +349,34 @@ export function transformDocument(source, annotations) {
         vLine++;
     }
 
-    const sorted = [...typeAnnotations].sort((a, b) => a.originalLine - b.originalLine);
+    // Turn annotations into injection UNITS: { originalLine, lines:[{text,
+    // commentRange}] }. A regular annotation is one unit (its toJsDocType
+    // output). Per-parameter annotations (kind 'param'/'return') sharing an
+    // owning function are grouped into ONE @param/@returns block.
+    const regular     = typeAnnotations.filter(a => a.kind !== 'param' && a.kind !== 'return');
+    const paramReturn = typeAnnotations.filter(a => a.kind === 'param' || a.kind === 'return');
 
-    for (const ann of sorted) {
-        // Flush original lines up to (not including) the annotation's line.
-        while (oLine < ann.originalLine) {
+    const units = regular.map(ann => ({
+        originalLine: ann.originalLine,
+        lines: toJsDocType(ann.ety, ann.kind).split('\n')
+            .map(text => ({ text, commentRange: ann.commentRange })),
+    }));
+
+    // Precedence: a block-style annotation on a function wins over per-param
+    // ones on the same node — drop the param group to avoid double injection.
+    const regularNodes = new Set(regular.map(a => a.nodeStartOffset));
+    const groups = new Map(); // nodeStartOffset -> param/return annotations
+    for (const a of paramReturn) {
+        if (regularNodes.has(a.nodeStartOffset)) continue;
+        (groups.get(a.nodeStartOffset) ?? groups.set(a.nodeStartOffset, []).get(a.nodeStartOffset)).push(a);
+    }
+    for (const group of groups.values()) units.push(buildParamUnit(group));
+
+    units.sort((a, b) => a.originalLine - b.originalLine);
+
+    for (const unit of units) {
+        // Flush original lines up to (not including) the unit's line.
+        while (oLine < unit.originalLine) {
             vToO.set(vLine, oLine);
             oToV.set(oLine, vLine);
             lineKind.set(vLine, { kind: 'code' });
@@ -337,18 +384,17 @@ export function transformDocument(source, annotations) {
             vLine++; oLine++;
         }
 
-        // Insert JSDoc above the annotated line.
-        const jsdoc = toJsDocType(ann.ety, ann.kind);
-        for (const jl of jsdoc.split('\n')) {
-            // Map inserted JSDoc lines back to the annotation's original line.
-            // Do NOT set oToV here — the annotated line itself is mapped in
-            // the next while-iteration or the final flush, so oToV ends up
-            // pointing at the virtual line AFTER the JSDoc block, where the
-            // code actually lives. This delayed mapping is intentional;
-            // adding oToV here would off-by-one every hover. Trust the math.
-            vToO.set(vLine, ann.originalLine);
-            lineKind.set(vLine, { kind: 'jsdoc', commentRange: ann.commentRange });
-            virtualLines.push(jl);
+        // Insert the JSDoc above the annotated line.
+        for (const { text, commentRange } of unit.lines) {
+            // Map inserted JSDoc lines back to the unit's original line. Do NOT
+            // set oToV here — the annotated line itself is mapped in the next
+            // while-iteration or the final flush, so oToV ends up pointing at
+            // the virtual line AFTER the JSDoc block, where the code actually
+            // lives. This delayed mapping is intentional; adding oToV here would
+            // off-by-one every hover. Trust the math.
+            vToO.set(vLine, unit.originalLine);
+            lineKind.set(vLine, { kind: 'jsdoc', commentRange });
+            virtualLines.push(text);
             vLine++;
         }
     }

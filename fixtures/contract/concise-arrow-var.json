@@ -9,7 +9,8 @@
       "etyEndOffset": 51,
       "kind": "variable",
       "name": "double",
-      "ety": "(number) => number"
+      "ety": "(number) => number",
+      "doc": ""
     }
   ]
 }

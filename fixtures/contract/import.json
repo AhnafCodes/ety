@@ -9,7 +9,8 @@
       "etyEndOffset": 42,
       "kind": "import",
       "name": "",
-      "ety": "import { User, Role } from './types'"
+      "ety": "import { User, Role } from './types'",
+      "doc": ""
     },
     {
       "nodeStartOffset": 43,
@@ -17,7 +18,8 @@
       "etyEndOffset": 80,
       "kind": "variable",
       "name": "current",
-      "ety": "User | null"
+      "ety": "User | null",
+      "doc": ""
     }
   ]
 }

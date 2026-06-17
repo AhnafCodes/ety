@@ -1,6 +1,6 @@
 {
   "name": "multi-declarator-multi-line",
-  "description": "Gate 1: trailing comment on the FINAL line of a multi-line declaration — one annotation pinned to the statement start, so JSDoc never lands mid-statement.",
+  "description": "Gate 1: trailing comment on the FINAL line of a multi-line declaration \u2014 one annotation pinned to the statement start, so JSDoc never lands mid-statement.",
   "source": "let x = 1,\n    y = 2; // T: number\n",
   "expected": [
     {
@@ -9,7 +9,8 @@
       "etyEndOffset": 34,
       "kind": "variable",
       "name": "x",
-      "ety": "number"
+      "ety": "number",
+      "doc": ""
     }
   ]
 }
