@@ -200,17 +200,19 @@ export function onCompletion(state, deps, { textDocument, position }) {
     const lineEnd = nextStart ?? Number.MAX_SAFE_INTEGER;
 
     let inferred;
+    // Return true to short-circuit: ts.forEachChild only stops descending when
+    // the callback returns a truthy value, so propagate it up the recursion to
+    // halt the moment the governed binding is found.
     const visit = node => {
-        if (inferred !== undefined) return;
         if (ts.isVariableDeclaration(node) && node.initializer) {
             const nameStart = node.name.getStart(sourceFile);
             if (nameStart >= lineStart && nameStart < lineEnd) {
                 const literal = checker.getTypeAtLocation(node.initializer);
                 inferred = checker.typeToString(checker.getBaseTypeOfLiteralType(literal));
-                return;
+                return true;
             }
         }
-        ts.forEachChild(node, visit);
+        return ts.forEachChild(node, visit);
     };
     visit(sourceFile);
 
