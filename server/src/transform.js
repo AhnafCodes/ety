@@ -169,6 +169,22 @@ export function extractParamList(s) {
     return null;
 }
 
+// True iff s starts with '(' and its matching ')' closes at depth 0 with only
+// whitespace after — i.e. s is exactly a parameter list, no return type. Reuses
+// the shared `scan` tokenizer so string/'=>' skip discipline is inherited.
+export function isBareParamList(s) {
+    if (!s.startsWith('(')) return false;
+    let depth = 0;
+    for (const t of scan(s)) {
+        if (t.type !== 'char') continue;
+        if ('([<{'.includes(t.c)) depth++;
+        else if (')]>}'.includes(t.c) && --depth === 0) {
+            return s.slice(t.i + 1).trim() === '';
+        }
+    }
+    return false;
+}
+
 // Raw //T payload -> a JSDoc tag. TypeScript understands full function
 // signatures inside @type, so no @param/@returns generation is needed in v1.
 // The one exception is a class, whose {T} payload becomes @template.
@@ -193,7 +209,7 @@ export function toJsDocType(ety, kind) {
     }
 
     // Step 2: {} -> <> for generics only (object types preserved)
-    const angleFixed = convertGenerics(ety);
+    let angleFixed = convertGenerics(ety);
 
     // Step 3: only attempt parameter naming for a genuine top-level function
     // signature. Strip a leading generic param list <...>, then require the
@@ -211,6 +227,18 @@ export function toJsDocType(ety, kind) {
         }
         s = s.slice(end).trim();
     }
+
+    // Void-return shorthand (functions only): a bare parameter list with no
+    // declared return type implies `=> void` (spec: "(string)" === "(string) =>
+    // void"). Gate on kind — a VARIABLE annotated `(string)` keeps its
+    // parenthesized-type meaning, so this must not fire there. Append to both
+    // `angleFixed` (extractParamList consumes it) and `s` (keeps the
+    // startsWith('(') path alive below).
+    if (kind === 'function' && isBareParamList(s)) {
+        angleFixed += ' => void';
+        s += ' => void';
+    }
+
     if (!s.startsWith('(') && !s.startsWith('new (')) {
         return `/** @type {${angleFixed}} */`;
     }
