@@ -22,6 +22,8 @@ Ety is inspired from Python's Type Comments, a Hidden GEM(first form of hinting 
 
 <img width="1408" height="768" alt="Gemini_Generated_Image_mis8okmis8okmis8" src="https://github.com/user-attachments/assets/9f73f17b-9245-4ab2-8b29-dee3d838e0ab" />
 
+With it in a Variable Declarition statement  Name & Value are in the focus and Type are secondary(in the METALANE i.e. // T comments) 
+
 
 ## How it works
 
