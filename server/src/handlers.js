@@ -14,11 +14,12 @@ import { tsCategoryToSeverity } from './tsHost.js';
 
 export const DEBOUNCE_MS = 200;
 
-// The closed set this milestone offers — primitives only. The instant an
-// inferred type falls outside it, completion stays silent: that boundary is
+// The closed set this milestone offers — the JavaScript primitives. The instant
+// an inferred type falls outside it, completion stays silent: that boundary is
 // what keeps this a sliver and out of the deferred general-completion problem
-// (implementation-plan.md, Milestone 9).
-const BASE_TYPES = new Set(['string', 'number', 'boolean', 'undefined']);
+// (implementation-plan.md, Milestone 9). `null`, `bigint`, and `symbol` round
+// out the primitive set alongside the original four.
+const BASE_TYPES = new Set(['string', 'number', 'boolean', 'undefined', 'null', 'bigint', 'symbol']);
 
 export function uriToPath(uri) {
     if (uri.startsWith('file://')) return fileURLToPath(uri);

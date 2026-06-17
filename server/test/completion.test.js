@@ -58,6 +58,17 @@ describe('onCompletion — inference-driven base-type suggestion (REAL TS)', () 
         expect(realSetup(b).labelsAt(afterColon(b))).toContain('boolean');
     });
 
+    it('covers the full primitive set: null, bigint, symbol', () => {
+        const cases = {
+            null:   'let x = null; // T:\n',
+            bigint: 'let x = 10n; // T:\n',
+            symbol: 'let x = Symbol(); // T:\n',
+        };
+        for (const [type, src] of Object.entries(cases)) {
+            expect(realSetup(src).labelsAt(afterColon(src))).toContain(type);
+        }
+    });
+
     it('excludes non-primitive inferred types — the sliver stays a sliver', () => {
         // `{ a: number }` is outside the closed primitive set, so nothing is
         // offered. This is the guard against creeping back into the deferred
