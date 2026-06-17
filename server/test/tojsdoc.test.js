@@ -46,6 +46,18 @@ describe('toJsDocType', () => {
         //     count as a name separator at depth > 0 ---
         ['({id: string}) => void', 'function',
             '/** @type {(p0: {id: string}) => void} */'],
+        // --- void-return shorthand: a bare param list implies `=> void`,
+        //     functions ONLY (README "Void return (shorthand)") ---
+        ['(string)', 'function',
+            '/** @type {(p0: string) => void} */'],
+        ['()', 'function',
+            '/** @type {() => void} */'],
+        ['{T}(T[])', 'function',
+            '/** @type {<T>(p0: T[]) => void} */'],
+        // a VARIABLE keeps `(string)` as a parenthesized type — shorthand must
+        // not fire off-kind (the gate that makes the change non-regressive)
+        ['(string)', 'variable',
+            '/** @type {(string)} */'],
     ];
 
     for (const [ety, kind, expected] of table) {
