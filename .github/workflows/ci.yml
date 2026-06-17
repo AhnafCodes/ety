@@ -39,3 +39,34 @@ jobs:
       - run: npm test --workspace server
       - run: npm test --workspace client
       - run: xvfb-run -a npm run test:e2e --workspace client
+
+  neovim:
+    name: neovim client (Gate 8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/ety-parser
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Neovim 0.11+ for the native vim.lsp.config/enable API the client uses.
+      - name: Install Neovim 0.11+
+        run: |
+          curl -fsSL -o /tmp/nvim.tar.gz \
+            https://github.com/neovim/neovim/releases/download/v0.11.0/nvim-linux-x86_64.tar.gz
+          tar -C /opt -xzf /tmp/nvim.tar.gz
+          echo "/opt/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - run: nvim --version | head -1
+      - run: npm ci
+      # The attach-and-diagnose test spawns the real server, so it needs the
+      # compiled parser .node; the config smoke needs neither Node nor the addon.
+      - run: npm run build:parser
+      # Pure config assertions — resolves the launch command without spawning.
+      - run: nvim --headless -l client-neovim/test/config_smoke.lua
+      # Node-present e2e: drives the real server through Neovim's LSP client and
+      # asserts the diagnostic lands on the ORIGINAL line, not the // T: line.
+      - run: nvim --headless -l client-neovim/test/attach_diagnose.lua
