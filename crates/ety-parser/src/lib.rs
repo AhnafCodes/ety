@@ -7,8 +7,8 @@
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    ArrowFunctionExpression, Class, ClassBody, Comment, Function, FunctionBody, MethodDefinition,
-    PropertyDefinition, VariableDeclaration,
+    ArrowFunctionExpression, Class, ClassBody, Comment, FormalParameter, Function, FunctionBody,
+    MethodDefinition, PropertyDefinition, VariableDeclaration,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -26,12 +26,18 @@ pub struct EtyAnnotation {
     pub ety_start_offset: u32,
     /// End (exclusive) of the `// T:` comment.
     pub ety_end_offset: u32,
-    /// "function" | "variable" | "property" | "class" | "import"
+    /// "function" | "variable" | "property" | "class" | "import" | "param" | "return"
     pub kind: String,
     /// Declaration name; empty for anonymous functions/classes and imports.
+    /// For "param" it is the parameter name.
     pub name: String,
     /// Normalized payload: text after the first `T:`, whitespace-trimmed.
+    /// For "param" it is the type only (the `- description` tail is stripped
+    /// into `doc`); for "return" it is the text after the leading `=>`.
     pub ety: String,
+    /// Per-parameter description: the text after the first top-level ` - ` in a
+    /// "param" payload (e.g. "First operand"). Empty for every other kind.
+    pub doc: String,
 }
 
 #[cfg(feature = "node-api")]
@@ -64,17 +70,27 @@ fn extract_t_comments<'a>(source: &'a str, comments: &[Comment]) -> Vec<TComment
 /// serves as the spec's check_class_body — both reduce to the same offsets
 /// once the AST types are erased. `first_element_start` must be the body's
 /// span end for an empty body (the inverted-range guard).
+///
+/// `annotations` is sorted by start offset: binary-search past `open_brace`,
+/// then scan only the (usually empty) window before `first_element_start`, so a
+/// node with no annotation inside it costs O(log n), not O(n).
 fn check_block<'a, 'b>(
     open_brace: u32,
     first_element_start: u32,
     annotations: &'b [TComment<'a>],
 ) -> Option<&'b TComment<'a>> {
-    annotations.iter().find(|(s, e, _)| *s > open_brace && *e < first_element_start)
+    let from = annotations.partition_point(|(s, _, _)| *s <= open_brace);
+    annotations[from..]
+        .iter()
+        .take_while(|(s, _, _)| *s < first_element_start)
+        .find(|(_, e, _)| *e < first_element_start)
 }
 
 /// Inline/Trailing Check (variables, properties): the comment must start at
 /// or after the node's end, before the next newline. Byte range, not line
-/// number, decides.
+/// number, decides. Sorted annotations -> the first candidate at/after
+/// `node_end` is the only one that can match (any later one starts further
+/// right), so binary-search to it and test that single entry.
 fn check_inline<'a, 'b>(
     node_end: u32,
     source: &str,
@@ -84,7 +100,8 @@ fn check_inline<'a, 'b>(
         .find('\n')
         .map_or(source.len() as u32, |i| node_end + i as u32);
 
-    annotations.iter().find(|(s, _, _)| *s >= node_end && *s < next_newline)
+    let from = annotations.partition_point(|(s, _, _)| *s < node_end);
+    annotations.get(from).filter(|(s, _, _)| *s < next_newline)
 }
 
 /// First element of a function body: a directive ('use strict') can precede
@@ -105,6 +122,10 @@ struct EtyVisitor<'a> {
     source: &'a str,
     annotations: Vec<TComment<'a>>,
     results: Vec<EtyAnnotation>,
+    /// (function start, body start, body end) for every function with a body —
+    /// used to bind a `// T: => R` return comment to the innermost enclosing
+    /// function (smallest containing body span) in a post-pass.
+    fn_bodies: Vec<(u32, u32, u32)>,
 }
 
 impl<'a> EtyVisitor<'a> {
@@ -116,7 +137,54 @@ impl<'a> EtyVisitor<'a> {
             kind: kind.to_string(),
             name: name.to_string(),
             ety: c.2.to_string(),
+            doc: String::new(),
         });
+    }
+
+    /// A per-parameter annotation: `node_start` is the ENCLOSING function's
+    /// start (the grouping key + injection point), `name` is the parameter
+    /// name, and the payload is split at the first top-level ` - ` into the
+    /// type (`ety`) and an optional description (`doc`).
+    fn push_param(&mut self, fn_start: u32, c: TComment<'a>, name: &str) {
+        let (ty, doc) = c.2.split_once(" - ").map_or((c.2, ""), |(t, d)| (t.trim(), d.trim()));
+        self.results.push(EtyAnnotation {
+            node_start_offset: fn_start,
+            ety_start_offset: c.0,
+            ety_end_offset: c.1,
+            kind: "param".to_string(),
+            name: name.to_string(),
+            ety: ty.to_string(),
+            doc: doc.to_string(),
+        });
+    }
+
+    /// Match a trailing `// T:` to each formal parameter. The match window for
+    /// parameter `i` is [param.end, next_param.start) — or, for the last
+    /// parameter, [param.end, `upper_fallback`) (the body's open brace, or the
+    /// parameter list's end for a bodyless function). A byte range — not a line
+    /// — so params sharing a line don't cross-claim each other's comment.
+    ///
+    /// `annotations` is sorted by start offset, so binary-search to the first
+    /// candidate in the parameter region and bail when there is none — the
+    /// common case (no per-param comments) is then O(log n), not O(params·n).
+    fn collect_params(&mut self, fn_start: u32, params: &[FormalParameter<'a>], upper_fallback: u32) {
+        let Some(first) = params.first() else { return };
+        let start = self.annotations.partition_point(|(s, _, _)| *s < first.span.end);
+        if self.annotations.get(start).is_none_or(|(s, _, _)| *s >= upper_fallback) {
+            return; // no candidate anywhere in the parameter list
+        }
+        for (i, p) in params.iter().enumerate() {
+            let upper = params.get(i + 1).map_or(upper_fallback, |next| next.span.start);
+            let found = self.annotations[start..]
+                .iter()
+                .take_while(|(s, _, _)| *s < upper_fallback)
+                .find(|(s, _, _)| *s >= p.span.end && *s < upper)
+                .copied();
+            if let Some(c) = found {
+                let name = p.pattern.get_identifier_name();
+                self.push_param(fn_start, c, name.map_or("", |n| n.as_str()));
+            }
+        }
     }
 }
 
@@ -130,7 +198,12 @@ impl<'a> Visit<'a> for EtyVisitor<'a> {
                 let name = func.id.as_ref().map_or("", |id| id.name.as_str());
                 self.push(func.span.start, c, "function", name);
             }
+            self.fn_bodies.push((func.span.start, body.span.start, body.span.end));
         }
+        // Per-parameter annotations: the upper bound for the LAST param is the
+        // body's open brace (or the param list's end if there is no body).
+        let upper_fallback = func.body.as_ref().map_or(func.params.span.end, |b| b.span.start);
+        self.collect_params(func.span.start, &func.params.items, upper_fallback);
         walk::walk_function(self, func, flags);
     }
 
@@ -215,11 +288,39 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
     // it becomes its own annotation, node_start_offset = its own comment start
     // (the hoisted virtual line maps back to this line). Imports are excluded
     // from node matching so a trailing import can't bind to a declaration.
-    let (imports, candidates): (Vec<_>, Vec<_>) =
+    let (imports, rest): (Vec<_>, Vec<_>) =
         t_comments.into_iter().partition(|(_, _, p)| p.starts_with("import "));
 
-    let mut visitor = EtyVisitor { source, annotations: candidates, results: Vec::new() };
+    // `// T: => R` is a per-parameter-style RETURN annotation: it starts with
+    // `=>` and binds to the enclosing function (not a node the visitor matches),
+    // so it is pulled out before node matching, like imports.
+    let (returns, candidates): (Vec<_>, Vec<_>) =
+        rest.into_iter().partition(|(_, _, p)| p.starts_with("=>"));
+
+    let mut visitor =
+        EtyVisitor { source, annotations: candidates, results: Vec::new(), fn_bodies: Vec::new() };
     visitor.visit_program(&ret.program);
+
+    // Bind each return comment to the innermost enclosing function — the
+    // function whose body span is smallest among those containing the comment.
+    for (s, e, p) in returns {
+        if let Some(&(fn_start, _, _)) = visitor
+            .fn_bodies
+            .iter()
+            .filter(|(_, bs, be)| *bs < s && s < *be)
+            .min_by_key(|(_, bs, be)| be - bs)
+        {
+            visitor.results.push(EtyAnnotation {
+                node_start_offset: fn_start,
+                ety_start_offset: s,
+                ety_end_offset: e,
+                kind: "return".to_string(),
+                name: String::new(),
+                ety: p[2..].trim().to_string(), // text after the leading `=>`
+                doc: String::new(),
+            });
+        }
+    }
 
     let mut results: Vec<EtyAnnotation> = imports
         .into_iter()
@@ -230,6 +331,7 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
             kind: "import".to_string(),
             name: String::new(),
             ety: p.to_string(),
+            doc: String::new(),
         })
         .collect();
     results.extend(visitor.results);
@@ -384,6 +486,7 @@ mod tests {
                 kind: "function".to_string(),
                 name: "createUser".to_string(),
                 ety: "(string) => User".to_string(),
+                doc: String::new(),
             }]
         );
     }
@@ -481,5 +584,56 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, "function");
         assert_eq!(result[0].node_start_offset, source.find("function").unwrap() as u32);
+    }
+
+    // --- per-parameter style (Gap 2): trailing // T: on params + // T: => R ---
+
+    #[test]
+    fn per_parameter_annotations_bind_to_params_and_return_binds_to_function() {
+        let source = "function add(\n    a,  // T: number - First operand\n    b   // T: number - Second operand\n) {\n    return a + b;  // T: => number\n}\n";
+        let result = parse_source(source);
+        let fn_start = source.find("function").unwrap() as u32;
+
+        let params: Vec<_> = result.iter().filter(|a| a.kind == "param").collect();
+        assert_eq!(params.len(), 2);
+        // Source order is preserved (results sort by ety_start_offset).
+        assert_eq!((params[0].name.as_str(), params[0].ety.as_str()), ("a", "number"));
+        assert_eq!(params[0].doc, "First operand");
+        assert_eq!((params[1].name.as_str(), params[1].ety.as_str()), ("b", "number"));
+        assert_eq!(params[1].doc, "Second operand");
+        // Every param annotation groups under the enclosing function's start.
+        assert!(params.iter().all(|p| p.node_start_offset == fn_start));
+
+        let ret: Vec<_> = result.iter().filter(|a| a.kind == "return").collect();
+        assert_eq!(ret.len(), 1);
+        assert_eq!(ret[0].ety, "number"); // text after the leading `=>`
+        assert_eq!(ret[0].node_start_offset, fn_start);
+    }
+
+    #[test]
+    fn param_without_description_has_empty_doc() {
+        let source = "function f(\n    x  // T: string\n) {\n    return x;\n}\n";
+        let result = parse_source(source);
+        let p = result.iter().find(|a| a.kind == "param").unwrap();
+        assert_eq!((p.name.as_str(), p.ety.as_str(), p.doc.as_str()), ("x", "string", ""));
+    }
+
+    #[test]
+    fn param_with_no_t_comment_is_untouched() {
+        let source = "function f(\n    a,  // T: number\n    b\n) {\n    return a;\n}\n";
+        let result = parse_source(source);
+        let params: Vec<_> = result.iter().filter(|a| a.kind == "param").collect();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "a");
+    }
+
+    #[test]
+    fn return_comment_binds_to_innermost_enclosing_function() {
+        // The `// T: => string` sits in the INNER function body; it must bind to
+        // `inner` (smallest containing body span), not the outer function.
+        let source = "function outer() {\n    function inner(\n        x  // T: number\n    ) {\n        return x;  // T: => string\n    }\n    return inner;\n}\n";
+        let result = parse_source(source);
+        let ret = result.iter().find(|a| a.kind == "return").unwrap();
+        assert_eq!(ret.node_start_offset, source.find("function inner").unwrap() as u32);
     }
 }

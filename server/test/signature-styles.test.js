@@ -64,16 +64,21 @@ describe('Signature styles that WORK (annotation is live: deliberate misuse is c
         const bad = 'function add(a, b) {\n// Adds two numbers together\n// T: (number, number) => number\n    return a + b;\n}\nadd("x", "y");\n';
         expect(codes(bad)).toEqual([2345]);
     });
-});
 
-describe('GAP: styles the README documents but the server does NOT yet support', () => {
-    // Plan to turn this green: locals/signature-style-gaps-plan.md (Gap 2)
-    it('per-parameter — trailing // T: on params and return yields NO annotations', () => {
-        const src = 'function add(\n    a,  // T: number - First operand\n    b   // T: number - Second operand\n) {\n    return a + b;  // T: => number\n}\nadd("x", "y");\n';
-        // The visitor binds // T: only to functions/variables/properties/classes
-        // — never to a function PARAMETER or a RETURN statement. So none of these
-        // comments attach: zero annotations, zero type-checking, bad call silent.
-        expect(parse_ety(src)).toEqual([]);
-        expect(codes(src)).toEqual([]);
+    it('per-parameter — trailing // T: on each param and a // T: => R return', () => {
+        // Each param carries its own type (with an optional `- description`), and
+        // the return type is a bare `=> R`. The parser assembles a @param/@returns
+        // JSDoc block above the function; the misuse below must be caught.
+        const bad = 'function add(\n    a,  // T: number - First operand\n    b   // T: number - Second operand\n) {\n    return a + b;  // T: => number\n}\nadd("x", "y");\n';
+        expect(codes(bad)).toEqual([2345]); // string arg vs number param
+
+        const ok = 'function add(\n    a,  // T: number - First operand\n    b   // T: number - Second operand\n) {\n    return a + b;  // T: => number\n}\nconst r = add(1, 2);\nr.toFixed(2);\n';
+        expect(codes(ok)).toEqual([]);
+    });
+
+    it('per-parameter — a wrong RETURN type is caught against the body', () => {
+        // @returns {string} but the body returns a number -> mismatch.
+        const src = 'function add(\n    a,  // T: number\n    b   // T: number\n) {\n    return a + b;  // T: => string\n}\n';
+        expect(codes(src)).toContain(2322); // number not assignable to string
     });
 });

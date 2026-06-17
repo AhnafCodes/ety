@@ -1,6 +1,6 @@
 {
   "name": "multi-declarator-single-line",
-  "description": "Gate 1: statement-level matching — one annotation, node offset at the let keyword (per-declarator matching would double-fire).",
+  "description": "Gate 1: statement-level matching \u2014 one annotation, node offset at the let keyword (per-declarator matching would double-fire).",
   "source": "let x = 1, y = 2; // T: number\n",
   "expected": [
     {
@@ -9,7 +9,8 @@
       "etyEndOffset": 30,
       "kind": "variable",
       "name": "x",
-      "ety": "number"
+      "ety": "number",
+      "doc": ""
     }
   ]
 }

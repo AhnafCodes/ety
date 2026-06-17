@@ -27,6 +27,7 @@ describe('parse_ety contract', () => {
     it('exposes napi-rs camelCased fields, not Rust snake_case', () => {
         const [annotation] = parse_ety('let count = 0; // T: number\n');
         expect(Object.keys(annotation).sort()).toEqual([
+            'doc',
             'ety',
             'etyEndOffset',
             'etyStartOffset',

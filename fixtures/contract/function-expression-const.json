@@ -9,7 +9,8 @@
       "etyEndOffset": 58,
       "kind": "function",
       "name": "",
-      "ety": "(string) => User"
+      "ety": "(string) => User",
+      "doc": ""
     }
   ]
 }
