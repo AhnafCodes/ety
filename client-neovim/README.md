@@ -57,6 +57,10 @@ prefer to manage servers there.
 # Config smoke (no Node, no server spawn needed):
 nvim --headless -l client-neovim/test/config_smoke.lua
 
+# Attach-and-diagnose e2e (spawns the real server; needs Node + built parser):
+npm run build:parser   # once, from the repo root
+nvim --headless -l client-neovim/test/attach_diagnose.lua
+
 # Try it live: open a fixture and check diagnostics/hover.
 nvim fixtures/workspace/type-error.js
 ```
@@ -67,10 +71,18 @@ the Node resolver honors `ETY_NODE`. It does **not** spawn the server (so Node
 need not be installed) and needs no GUI — mirroring the JetBrains descriptor
 smoke test.
 
+`attach_diagnose.lua` drives the real server: it `setup()`s ety, opens
+`fixtures/workspace/type-error.js`, waits for the client to attach and publish,
+and asserts the diagnostic lands on the **original** error line (`count =
+"oops"`), not the `// T:` line above it. It **skips** (exit 0) when Node is
+absent or Neovim is older than 0.11, exactly as the JetBrains e2e is gated on
+the JVM toolchain.
+
 ## Status
 
-Scaffold (Milestone 10 / Gate 8). Done: the `setup`/`resolve`/`config` module
-and the headless config smoke (authored; run on a machine with Neovim 0.11+).
-Remaining to close Gate 8: the headless attach-and-diagnose e2e, and the manual
-visual check in a real Neovim session — see
+Milestone 10 / Gate 8, green implementation in place. Done: the
+`setup`/`resolve`/`config` module, the headless config smoke, and the
+attach-and-diagnose e2e (all authored; run on a machine with Neovim 0.11+).
+Remaining to close Gate 8: run the two headless tests in CI/locally on a box
+with the toolchain, plus the manual visual check in a real Neovim session — see
 [`GATE-8-CHECKLIST.md`](./GATE-8-CHECKLIST.md).
