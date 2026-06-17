@@ -37,4 +37,5 @@ jobs:
       - run: npm ci
       - run: npm run build:parser
       - run: npm test --workspace server
+      - run: npm test --workspace client
       - run: xvfb-run -a npm run test:e2e --workspace client

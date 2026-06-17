@@ -1,0 +1,32 @@
+{
+    // Press F5 with this file present to open a second VS Code window (the
+    // "Extension Development Host") with the ety extension loaded. Unlike
+    // `npm run test:e2e`, this window stays open so you can edit files and
+    // watch diagnostics/hover update live.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Extension",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
+                // Open the e2e fixture workspace so there's already annotated
+                // code to play with. Swap for any folder, or drop this line to
+                // start empty.
+                "${workspaceFolder}/fixtures/workspace",
+                // Load ety from client/ (its package.json is the manifest the
+                // extension host reads — main, activationEvents, engines).
+                "--extensionDevelopmentPath=${workspaceFolder}/client",
+                // Isolate from your other installed extensions, matching the
+                // e2e run. Remove this if you want your normal setup.
+                "--disable-extensions"
+            ],
+            // The LSP server is forked as a child node process; this lets you
+            // step through server/src/*.js too, not just the client.
+            "outFiles": [
+                "${workspaceFolder}/client/**/*.js",
+                "${workspaceFolder}/server/**/*.js"
+            ]
+        }
+    ]
+}

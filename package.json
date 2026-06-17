@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "build:parser": "npm run build --workspace ety-parser",
-    "test": "npm test --workspace server",
+    "test": "npm test --workspace server && npm test --workspace client",
     "test:e2e": "npm run test:e2e --workspace client"
   }
 }

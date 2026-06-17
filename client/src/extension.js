@@ -7,13 +7,14 @@
 // spec's `command: process.execPath` form would not spawn a node server. We
 // use lsp-sample's `module` form instead — the client forks the module with
 // node and IPC transport.
-const path = require('node:path');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
+const { resolveServerModule } = require('./resolveServerModule');
 
 let client;
 
 function activate() {
-    const serverModule = path.resolve(__dirname, '..', '..', 'server', 'src', 'main.js');
+    // Prefer the server bundled in the .vsix; fall back to the monorepo for F5.
+    const serverModule = resolveServerModule(__dirname);
 
     client = new LanguageClient(
         'ety',

@@ -1,0 +1,62 @@
+# Milestone 8 (packaging & release) — prebuild matrix. The parser is a
+# platform-specific native .node (Rust/napi); end users must never need Rust, so
+# CI compiles one binary per OS+CPU on a native runner and uploads it as an
+# artifact. Later M8 slices consume these to bundle the .vsix / JetBrains zip and
+# attach them to the GitHub Release. This workflow's sole job today: produce a
+# correct, named .node for every supported platform.
+name: Release (prebuild)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: # allow manual prebuilds without cutting a tag
+
+jobs:
+  prebuild:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14      # Apple Silicon runner
+            target: darwin-arm64
+          - os: macos-13      # Intel runner
+            target: darwin-x64
+          - os: ubuntu-latest
+            target: linux-x64-gnu
+          - os: windows-latest
+            target: win32-x64-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/ety-parser
+          # Cache key must vary by runner so an arm64 build never reuses x64
+          # artifacts (and vice versa).
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # `napi build --platform --release` emits ety-parser.<target>.node into the
+      # crate directory; each native runner builds for its own host arch, so no
+      # cross-compilation toolchain is needed.
+      - run: npm run build:parser
+
+      - name: Verify a platform .node was produced
+        shell: bash
+        run: ls -la crates/ety-parser/*.node
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ety-parser-${{ matrix.target }}
+          path: crates/ety-parser/*.node
+          if-no-files-found: error
+          retention-days: 7
