@@ -218,7 +218,14 @@ impl<'a> Visit<'a> for EtyVisitor<'a> {
             ) {
                 self.push(arrow.span.start, c, "function", "");
             }
+            // Only a block body can hold a `// T: => R` return comment.
+            self.fn_bodies.push((arrow.span.start, arrow.body.span.start, arrow.body.span.end));
         }
+        // Per-parameter annotations work for both block and concise arrows; the
+        // upper bound for the last param is the body's start (the `{` for a
+        // block body, the expression for a concise one — both sit after the
+        // closing `)`, so the trailing param comment falls before it).
+        self.collect_params(arrow.span.start, &arrow.params.items, arrow.body.span.start);
         walk::walk_arrow_function_expression(self, arrow);
     }
 
@@ -635,5 +642,49 @@ mod tests {
         let result = parse_source(source);
         let ret = result.iter().find(|a| a.kind == "return").unwrap();
         assert_eq!(ret.node_start_offset, source.find("function inner").unwrap() as u32);
+    }
+
+    #[test]
+    fn method_per_parameter_annotations_work() {
+        // Methods reach collect_params via the walk into method.value (a
+        // Function), so per-param + return work with no method-specific code.
+        let source = "class C {\n  add(\n    a,  // T: number - first\n    b   // T: number\n  ) {\n    return a + b;  // T: => number\n  }\n}\n";
+        let result = parse_source(source);
+        let params: Vec<_> = result.iter().filter(|a| a.kind == "param").collect();
+        assert_eq!(params.len(), 2);
+        assert_eq!((params[0].name.as_str(), params[0].ety.as_str(), params[0].doc.as_str()), ("a", "number", "first"));
+        assert_eq!(params[1].name, "b");
+        let ret = result.iter().find(|a| a.kind == "return").unwrap();
+        assert_eq!(ret.ety, "number");
+        // All grouped under the method's inner-function start (the param list).
+        assert!(params.iter().all(|p| p.node_start_offset == ret.node_start_offset));
+    }
+
+    #[test]
+    fn block_arrow_per_parameter_and_return_bind() {
+        let source = "const add = (\n    a,  // T: number\n    b   // T: number\n) => {\n    return a + b;  // T: => number\n};\n";
+        let result = parse_source(source);
+        let params: Vec<_> = result.iter().filter(|a| a.kind == "param").collect();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        let ret = result.iter().find(|a| a.kind == "return").unwrap();
+        assert_eq!(ret.ety, "number");
+        // Arrow params/return group under the arrow's start (at the `(`).
+        let arrow_start = source.find('(').unwrap() as u32;
+        assert!(params.iter().all(|p| p.node_start_offset == arrow_start));
+        assert_eq!(ret.node_start_offset, arrow_start);
+    }
+
+    #[test]
+    fn concise_arrow_binds_params_but_not_a_trailing_return() {
+        // A concise arrow has no block body, so a trailing `// T: => R` has no
+        // body to live in and does NOT bind (documented limitation); params,
+        // which sit before the `=>`, still bind.
+        let source = "const inc = (\n    n  // T: number\n) => n + 1;  // T: => number\n";
+        let result = parse_source(source);
+        let params: Vec<_> = result.iter().filter(|a| a.kind == "param").collect();
+        assert_eq!(params.len(), 1);
+        assert_eq!((params[0].name.as_str(), params[0].ety.as_str()), ("n", "number"));
+        assert!(result.iter().all(|a| a.kind != "return"));
     }
 }

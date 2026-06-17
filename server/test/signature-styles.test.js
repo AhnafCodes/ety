@@ -81,4 +81,21 @@ describe('Signature styles that WORK (annotation is live: deliberate misuse is c
         const src = 'function add(\n    a,  // T: number\n    b   // T: number\n) {\n    return a + b;  // T: => string\n}\n';
         expect(codes(src)).toContain(2322); // number not assignable to string
     });
+
+    it('per-parameter — works on a class METHOD', () => {
+        const bad = 'class C {\n  add(\n    a,  // T: number\n    b   // T: number\n  ) {\n    return a + b;  // T: => number\n  }\n}\nnew C().add("x", 1);\n';
+        expect(codes(bad)).toEqual([2345]);
+    });
+
+    it('per-parameter — works on a block-body ARROW', () => {
+        const bad = 'const add = (\n    a,  // T: number\n    b   // T: number\n) => {\n    return a + b;  // T: => number\n};\nadd("x", 1);\n';
+        expect(codes(bad)).toEqual([2345]);
+    });
+
+    it('per-parameter — params bind on a CONCISE arrow (return is inferred)', () => {
+        // A concise arrow has no block body, so a trailing `// T: => R` does not
+        // bind; the param annotations still apply and the return is inferred.
+        const bad = 'const inc = (\n    n  // T: number\n) => n + 1;\ninc("x");\n';
+        expect(codes(bad)).toEqual([2345]);
+    });
 });
