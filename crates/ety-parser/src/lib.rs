@@ -70,17 +70,27 @@ fn extract_t_comments<'a>(source: &'a str, comments: &[Comment]) -> Vec<TComment
 /// serves as the spec's check_class_body — both reduce to the same offsets
 /// once the AST types are erased. `first_element_start` must be the body's
 /// span end for an empty body (the inverted-range guard).
+///
+/// `annotations` is sorted by start offset: binary-search past `open_brace`,
+/// then scan only the (usually empty) window before `first_element_start`, so a
+/// node with no annotation inside it costs O(log n), not O(n).
 fn check_block<'a, 'b>(
     open_brace: u32,
     first_element_start: u32,
     annotations: &'b [TComment<'a>],
 ) -> Option<&'b TComment<'a>> {
-    annotations.iter().find(|(s, e, _)| *s > open_brace && *e < first_element_start)
+    let from = annotations.partition_point(|(s, _, _)| *s <= open_brace);
+    annotations[from..]
+        .iter()
+        .take_while(|(s, _, _)| *s < first_element_start)
+        .find(|(_, e, _)| *e < first_element_start)
 }
 
 /// Inline/Trailing Check (variables, properties): the comment must start at
 /// or after the node's end, before the next newline. Byte range, not line
-/// number, decides.
+/// number, decides. Sorted annotations -> the first candidate at/after
+/// `node_end` is the only one that can match (any later one starts further
+/// right), so binary-search to it and test that single entry.
 fn check_inline<'a, 'b>(
     node_end: u32,
     source: &str,
@@ -90,19 +100,8 @@ fn check_inline<'a, 'b>(
         .find('\n')
         .map_or(source.len() as u32, |i| node_end + i as u32);
 
-    annotations.iter().find(|(s, _, _)| *s >= node_end && *s < next_newline)
-}
-
-/// Per-parameter Check: the comment must start at or after the parameter's end
-/// and before `upper` (the next parameter's start, or the function body's open
-/// brace for the last parameter). A byte range — not a line — so params sharing
-/// a line don't cross-claim each other's trailing comment.
-fn check_param<'a, 'b>(
-    param_end: u32,
-    upper: u32,
-    annotations: &'b [TComment<'a>],
-) -> Option<&'b TComment<'a>> {
-    annotations.iter().find(|(s, _, _)| *s >= param_end && *s < upper)
+    let from = annotations.partition_point(|(s, _, _)| *s < node_end);
+    annotations.get(from).filter(|(s, _, _)| *s < next_newline)
 }
 
 /// First element of a function body: a directive ('use strict') can precede
@@ -162,11 +161,26 @@ impl<'a> EtyVisitor<'a> {
     /// Match a trailing `// T:` to each formal parameter. The match window for
     /// parameter `i` is [param.end, next_param.start) — or, for the last
     /// parameter, [param.end, `upper_fallback`) (the body's open brace, or the
-    /// parameter list's end for a bodyless function).
+    /// parameter list's end for a bodyless function). A byte range — not a line
+    /// — so params sharing a line don't cross-claim each other's comment.
+    ///
+    /// `annotations` is sorted by start offset, so binary-search to the first
+    /// candidate in the parameter region and bail when there is none — the
+    /// common case (no per-param comments) is then O(log n), not O(params·n).
     fn collect_params(&mut self, fn_start: u32, params: &[FormalParameter<'a>], upper_fallback: u32) {
+        let Some(first) = params.first() else { return };
+        let start = self.annotations.partition_point(|(s, _, _)| *s < first.span.end);
+        if self.annotations.get(start).is_none_or(|(s, _, _)| *s >= upper_fallback) {
+            return; // no candidate anywhere in the parameter list
+        }
         for (i, p) in params.iter().enumerate() {
             let upper = params.get(i + 1).map_or(upper_fallback, |next| next.span.start);
-            if let Some(&c) = check_param(p.span.end, upper, &self.annotations) {
+            let found = self.annotations[start..]
+                .iter()
+                .take_while(|(s, _, _)| *s < upper_fallback)
+                .find(|(s, _, _)| *s >= p.span.end && *s < upper)
+                .copied();
+            if let Some(c) = found {
                 let name = p.pattern.get_identifier_name();
                 self.push_param(fn_start, c, name.map_or("", |n| n.as_str()));
             }
