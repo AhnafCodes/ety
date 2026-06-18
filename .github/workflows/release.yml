@@ -1,9 +1,9 @@
 # Milestone 8 (packaging & release) — prebuild matrix. The parser is a
 # platform-specific native .node (Rust/napi); end users must never need Rust, so
 # CI compiles one binary per OS+CPU on a native runner and uploads it as an
-# artifact. Later M8 slices consume these to bundle the .vsix / JetBrains zip and
-# attach them to the GitHub Release. This workflow's sole job today: produce a
-# correct, named .node for every supported platform.
+# artifact. Downstream M8 slices consume the collected set to bundle the .vsix /
+# JetBrains zip and attach them to the GitHub Release. This workflow's job:
+# produce a correctly named .node for every supported platform, then gather them.
 name: Release (prebuild)
 
 on:
@@ -18,15 +18,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Every entry builds on a NATIVE runner for its arch, so `napi build`
+        # compiles for the host triple and no cross-compilation toolchain is
+        # needed. `target` is the napi platform suffix and MUST match the names
+        # the loader requires at runtime (crates/ety-parser/index.js) and the
+        # `expected` list in the collect job below.
         include:
-          - os: macos-14      # Apple Silicon runner
-            target: darwin-arm64
-          - os: macos-13      # Intel runner
+          - os: macos-13           # Intel mac
             target: darwin-x64
-          - os: ubuntu-latest
+          - os: macos-14           # Apple Silicon
+            target: darwin-arm64
+          - os: ubuntu-latest      # x64 Linux (glibc)
             target: linux-x64-gnu
-          - os: windows-latest
+          - os: ubuntu-24.04-arm   # native ARM64 Linux runner (glibc)
+            target: linux-arm64-gnu
+          - os: windows-latest     # x64 Windows
             target: win32-x64-msvc
+          - os: windows-11-arm     # native ARM64 Windows runner
+            target: win32-arm64-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -34,8 +43,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/ety-parser
-          # Cache key must vary by runner so an arm64 build never reuses x64
-          # artifacts (and vice versa).
+          # Cache key must vary by runner so one arch never reuses another's
+          # artifacts.
           key: ${{ matrix.target }}
 
       - uses: actions/setup-node@v4
@@ -46,17 +55,58 @@ jobs:
       - run: npm ci
 
       # `napi build --platform --release` emits ety-parser.<target>.node into the
-      # crate directory; each native runner builds for its own host arch, so no
-      # cross-compilation toolchain is needed.
+      # crate directory, named after the host triple — which on each native
+      # runner is exactly matrix.target.
       - run: npm run build:parser
 
-      - name: Verify a platform .node was produced
+      - name: Verify the expected target .node was produced
         shell: bash
-        run: ls -la crates/ety-parser/*.node
+        run: |
+          f="crates/ety-parser/ety-parser.${{ matrix.target }}.node"
+          ls -la "$f" || { echo "expected $f, found:"; ls -la crates/ety-parser/*.node; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
           name: ety-parser-${{ matrix.target }}
-          path: crates/ety-parser/*.node
+          path: crates/ety-parser/ety-parser.${{ matrix.target }}.node
+          if-no-files-found: error
+          retention-days: 7
+
+  # Gather every per-target artifact into one bundle the bundling step can copy
+  # into crates/ety-parser/ before `./gradlew buildPlugin` (or the .vsix pack).
+  # Fails if any matrix target is missing, so an incomplete set can't silently
+  # ship a plugin that runs on only some platforms — the CI-level mirror of the
+  # bundleParser tripwire in client-jetbrains/build.gradle.kts.
+  collect:
+    name: collect prebuilt binaries
+    needs: prebuild
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: natives
+          pattern: ety-parser-*
+          merge-multiple: true
+
+      - name: Verify every matrix target produced a binary
+        shell: bash
+        run: |
+          # Keep in sync with the prebuild matrix above.
+          expected="darwin-x64 darwin-arm64 linux-x64-gnu linux-arm64-gnu win32-x64-msvc win32-arm64-msvc"
+          echo "Collected:"; ls -la natives
+          missing=
+          for t in $expected; do
+            [ -f "natives/ety-parser.$t.node" ] || missing="$missing $t"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing native binaries:$missing"
+            exit 1
+          fi
+          echo "All native targets present:$expected"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ety-parser-natives
+          path: natives/*.node
           if-no-files-found: error
           retention-days: 7

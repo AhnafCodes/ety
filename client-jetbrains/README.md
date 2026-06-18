@@ -86,9 +86,12 @@ build machine at package time** — it globs `*.node`, it does not cross-compile
 > least one* binary is present — it does **not** verify the set is complete.
 
 To publish a plugin that runs on every user's machine, build each target's binary
-into `crates/ety-parser/` **before** `buildPlugin` (typically a CI matrix), so all
-the needed `*.node` files are present and get bundled together. The targets the
-loader knows about:
+into `crates/ety-parser/` **before** `buildPlugin`, so all the needed `*.node`
+files are present and get bundled together. That matrix lives in
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) (the
+`Release (prebuild)` workflow): it compiles one binary per target on a native
+runner, then a `collect` job gathers them into a single `ety-parser-natives`
+artifact and fails if any target is missing. The targets the loader knows about:
 
 | Platform | Arch | Binary file |
 |----------|------|-------------|
@@ -97,11 +100,13 @@ loader knows about:
 | Linux (musl)  | x64 / arm64 | `ety-parser.linux-x64-musl.node` / `ety-parser.linux-arm64-musl.node` |
 | Windows  | x64 / arm64 | `ety-parser.win32-x64-msvc.node` / `ety-parser.win32-arm64-msvc.node` |
 
-(The loader also branches on other Linux arches — arm, riscv64, s390x — and
-FreeBSD/Android; build those only if you intend to support them.) Each binary is
-produced by running `npm run build:parser` on that target. Pick the rows your
-release supports; a desktop IDE plugin typically needs the macOS, Linux-gnu, and
-Windows x64/arm64 cells.
+The `release.yml` matrix builds the six mainstream desktop cells — macOS
+x64/arm64, Linux-glibc x64/arm64, Windows x64/arm64 — each produced by
+`npm run build:parser` on a native runner. The remaining rows are intentionally
+**not** built: musl (Alpine) and darwin-universal are rarely needed for a desktop
+IDE, and the loader's other branches (Linux arm/riscv64/s390x, FreeBSD, Android)
+are out of scope. To add any of them, append a matrix entry (and its `expected`
+name in the `collect` job) — no other change is needed.
 
 ## Status
 
