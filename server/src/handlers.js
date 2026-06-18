@@ -7,18 +7,60 @@
 // them against the real disk — 'file:///dir/types.js' never exists there.
 // The original URI is kept inside the lineMaps entry for publishing.
 import ts from 'typescript';
-import { CompletionItemKind } from 'vscode-languageserver';
+import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
 import { fileURLToPath } from 'node:url';
 import { LineIndex, transformDocument } from './transform.js';
 import { tsCategoryToSeverity } from './tsHost.js';
 
 export const DEBOUNCE_MS = 200;
 
-// The closed set this milestone offers — primitives only. The instant an
-// inferred type falls outside it, completion stays silent: that boundary is
+// The closed set this milestone offers — the JavaScript primitives. The instant
+// an inferred type falls outside it, completion stays silent: that boundary is
 // what keeps this a sliver and out of the deferred general-completion problem
-// (implementation-plan.md, Milestone 9).
-const BASE_TYPES = new Set(['string', 'number', 'boolean', 'undefined']);
+// (implementation-plan.md, Milestone 9). `null`, `bigint`, and `symbol` round
+// out the primitive set alongside the original four.
+const BASE_TYPES = new Set(['string', 'number', 'boolean', 'undefined', 'null', 'bigint', 'symbol']);
+
+// The second closed set (Milestone 11): built-in container/wrapper constructors,
+// keyed by the inferred type's symbol name, mapped to a fixed ety-syntax
+// skeleton. Curated, not general — anything off this table (and off BASE_TYPES)
+// stays silent. Array is handled separately, since an array LITERAL ([]) and a
+// `new Array()` share the same inferred type but want different skeletons.
+const CONTAINER_TABLE = new Map([
+    ['Map', 'Map{}'], ['Set', 'Set{}'],
+    ['WeakMap', 'WeakMap{}'], ['WeakSet', 'WeakSet{}'],
+    ['Promise', 'Promise{}'],
+]);
+
+// A skeleton completion offered as an LSP snippet: the label is the bare ety
+// type (`Map{}`), the insertText drops the cursor inside the final bracket pair
+// (`Map{$0}`) so the user types the args. Whole-token — the `$0` is a cursor
+// hint, not an intra-line completion query, so the line-only invariant holds.
+function skeletonItem(label) {
+    return {
+        label,
+        kind: CompletionItemKind.Class,
+        insertText: `${label.slice(0, -1)}$0${label.slice(-1)}`,
+        insertTextFormat: InsertTextFormat.Snippet,
+    };
+}
+
+// Map an inferred initializer type to the completion ety offers, or null when it
+// falls outside both curated sets. Pure over (type, initializer node, checker):
+//   primitive            -> the bare keyword (Milestone 9)
+//   array literal `[]`   -> []        |  other array (new Array()) -> Array{}
+//   empty object `{}`    -> {}        |  named container by symbol -> <Name>{}
+export function inferEtyCompletion(type, initializer, checker) {
+    const str = checker.typeToString(type);
+    if (BASE_TYPES.has(str)) return { label: str, kind: CompletionItemKind.Keyword };
+    if (checker.isArrayType(type)) {
+        return skeletonItem(ts.isArrayLiteralExpression(initializer) ? '[]' : 'Array{}');
+    }
+    if (str === '{}' && ts.isObjectLiteralExpression(initializer)) return skeletonItem('{}');
+    const name = type.getSymbol()?.getName();
+    if (name && CONTAINER_TABLE.has(name)) return skeletonItem(CONTAINER_TABLE.get(name));
+    return null;
+}
 
 export function uriToPath(uri) {
     if (uri.startsWith('file://')) return fileURLToPath(uri);
@@ -199,23 +241,24 @@ export function onCompletion(state, deps, { textDocument, position }) {
     const nextStart = lineIndex.lineStarts[virtualLine + 1];
     const lineEnd = nextStart ?? Number.MAX_SAFE_INTEGER;
 
-    let inferred;
+    let item = null;
+    // Return true to short-circuit: ts.forEachChild only stops descending when
+    // the callback returns a truthy value, so propagate it up the recursion to
+    // halt the moment the governed binding is found.
     const visit = node => {
-        if (inferred !== undefined) return;
         if (ts.isVariableDeclaration(node) && node.initializer) {
             const nameStart = node.name.getStart(sourceFile);
             if (nameStart >= lineStart && nameStart < lineEnd) {
-                const literal = checker.getTypeAtLocation(node.initializer);
-                inferred = checker.typeToString(checker.getBaseTypeOfLiteralType(literal));
-                return;
+                const type = checker.getBaseTypeOfLiteralType(checker.getTypeAtLocation(node.initializer));
+                item = inferEtyCompletion(type, node.initializer, checker);
+                return true;
             }
         }
-        ts.forEachChild(node, visit);
+        return ts.forEachChild(node, visit);
     };
     visit(sourceFile);
 
-    if (inferred === undefined || !BASE_TYPES.has(inferred)) return [];
-    return [{ label: inferred, kind: CompletionItemKind.Keyword }];
+    return item ? [item] : [];
 }
 
 // Prevent unbounded growth: drop all per-document state on close, cancel any

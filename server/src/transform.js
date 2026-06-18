@@ -368,7 +368,8 @@ export function transformDocument(source, annotations) {
     const groups = new Map(); // nodeStartOffset -> param/return annotations
     for (const a of paramReturn) {
         if (regularNodes.has(a.nodeStartOffset)) continue;
-        (groups.get(a.nodeStartOffset) ?? groups.set(a.nodeStartOffset, []).get(a.nodeStartOffset)).push(a);
+        if (!groups.has(a.nodeStartOffset)) groups.set(a.nodeStartOffset, []);
+        groups.get(a.nodeStartOffset).push(a);
     }
     for (const group of groups.values()) units.push(buildParamUnit(group));
 
