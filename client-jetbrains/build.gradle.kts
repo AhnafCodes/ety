@@ -7,12 +7,15 @@
 // build, not Node. `cd client-jetbrains && ./gradlew runIde` launches a dev IDE
 // with the plugin loaded; it does not participate in `npm test`.
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.1.0"
+    id("org.jetbrains.kotlin.jvm") version "2.4.0"
     // IntelliJ Platform Gradle Plugin 2.x.
-    id("org.jetbrains.intellij.platform") version "2.2.1"
+    id("org.jetbrains.intellij.platform") version "2.16.0"
 }
 
 group = "dev.ety"
@@ -52,7 +55,22 @@ intellijPlatform {
 }
 
 kotlin {
-    jvmToolchain(21)
+    // Build runs on JDK 25 (the installed JDK), but the plugin must load inside
+    // IDEA 2025.3, which runs on JBR 21 — a Java 21 runtime cannot load Java 25
+    // bytecode. So compile ON 25 yet TARGET 21. The IJ plugin's config verifier
+    // also expects a 21 target for the 2025.3 platform.
+    jvmToolchain(25)
+}
+
+// Pin the bytecode target to 21 at the task level. Setting it on the `kotlin {}`
+// extension does not win over the toolchain's own 25 default, so the Kotlin and
+// Java compile tasks must be told directly — otherwise Gradle rejects the build
+// for inconsistent JVM targets (compileKotlin=25 vs compileJava=21).
+tasks.withType<KotlinCompile>().configureEach {
+    compilerOptions.jvmTarget = JvmTarget.JVM_21
+}
+tasks.withType<JavaCompile>().configureEach {
+    options.release = 21
 }
 
 // ── Server bundling ──────────────────────────────────────────────────────────
@@ -69,8 +87,31 @@ val bundleServer = tasks.register<Copy>("bundleServer") {
     into(layout.buildDirectory.dir("server"))
 }
 
-tasks.named("prepareSandbox") {
-    dependsOn(bundleServer)
+// Place the bundled server INSIDE the plugin directory in the sandbox/zip, at
+// `<pluginName>/server/...`. EtyLspServerDescriptor resolves the entry point via
+// PathManager.getPluginsPath()/ety-jetbrains/server/src/main.js, so the layout
+// here must land at exactly that path (pluginName == "ety-jetbrains"). Wiring
+// bundleServer's output through `from` also establishes the task dependency, so
+// the copy is no longer orphaned the way a bare dependsOn left it.
+tasks.named<PrepareSandboxTask>("prepareSandbox") {
+    from(bundleServer) {
+        into(pluginName.map { "$it/server" })
+    }
+}
+
+// buildSearchableOptions launches a headless IDE to pre-index this plugin's
+// settings for the IDE's search box. It is optional (the index is rebuilt at
+// runtime if absent) and the headless JBR aborts with SIGABRT on x86_64 macOS,
+// so disable it — the packaged plugin is unaffected. The two downstream tasks
+// that jar up its output must be disabled too; otherwise prepareJarSearchable
+// Options fails on a clean build looking for the directory the disabled task
+// never produced.
+listOf(
+    "buildSearchableOptions",
+    "prepareJarSearchableOptions",
+    "jarSearchableOptions",
+).forEach { name ->
+    tasks.named(name) { enabled = false }
 }
 
 // The descriptor smoke test resolves the server entry point via the repo-
