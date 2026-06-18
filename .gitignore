@@ -12,3 +12,5 @@ locals/
 # JetBrains plugin (Gradle) build output
 client-jetbrains/build/
 client-jetbrains/.gradle/
+client-jetbrains/.intellijPlatform/
+client-jetbrains/.kotlin/
