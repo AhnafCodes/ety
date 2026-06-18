@@ -74,28 +74,110 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 // ── Server bundling ──────────────────────────────────────────────────────────
-// The plugin spawns `node <server>/src/main.js --stdio`, so the server/ tree
-// (incl. node_modules and the pinned typescript@6.0.3) must travel inside the
-// plugin distribution — the relative ../../server path the VS Code client uses
-// does not survive plugin packaging. This copies it into the plugin sandbox/zip
-// under `server/`; EtyLspServerDescriptor resolves that location at runtime,
-// falling back to the repo-relative path for `runIde` during development.
+// The plugin spawns `node <server>/src/main.js --stdio`, so the server/ tree —
+// AND its production dependency closure (typescript@6.0.3 + the LSP libs) — must
+// travel inside the plugin distribution. The relative ../../server path the VS
+// Code client uses does not survive plugin packaging, and the deps cannot just
+// be copied from server/node_modules: `server` is an npm WORKSPACE, so npm
+// hoists its runtime deps up to the monorepo-root node_modules and leaves
+// server/node_modules effectively empty. In dev (runIde) Node still resolves
+// them by walking up to that root tree, but a packaged plugin is detached from
+// it — hence the explicit copy of the hoisted closure below. Without it, an
+// installed plugin starts `node main.js` and dies with "Cannot find module
+// 'typescript'", no server, no diagnostics.
+//
+// Keep this list in sync with `npm ls --workspace server --omit=dev --all`. It
+// is pinned by the repo lockfile, so the bundle ships exactly what `npm test`
+// validated. The doLast tripwire fails the BUILD (not the user's IDE) if any
+// entry is missing — e.g. deps not installed, or a new transitive dep appeared.
+val serverRuntimeDeps = listOf(
+    "typescript",
+    "vscode-languageserver",
+    "vscode-languageserver-protocol",
+    "vscode-languageserver-types",
+    "vscode-jsonrpc",
+    "vscode-languageserver-textdocument",
+)
+val rootNodeModules = rootProject.projectDir.resolve("../node_modules")
+val serverOutDir = layout.buildDirectory.dir("server")
+
 val bundleServer = tasks.register<Copy>("bundleServer") {
+    // Server source. node_modules is deliberately NOT globbed from server/ —
+    // it's an empty hoisted-away husk; the real deps come from the root copy.
     from(rootProject.projectDir.resolve("../server")) {
-        include("src/**", "node_modules/**", "package.json")
+        include("src/**", "package.json")
     }
-    into(layout.buildDirectory.dir("server"))
+    // The hoisted production closure → server/node_modules/<pkg>, the layout
+    // Node expects beside main.js once the plugin is detached from the monorepo.
+    serverRuntimeDeps.forEach { dep ->
+        from(rootNodeModules.resolve(dep)) {
+            into("node_modules/$dep")
+        }
+    }
+    into(serverOutDir)
+
+    // Captured as locals so the execution-time doLast closes over serializable
+    // values, not script-object references (required by the configuration cache).
+    val deps = serverRuntimeDeps
+    val outDir = serverOutDir
+    doLast {
+        val nodeModules = outDir.get().asFile.resolve("node_modules")
+        deps.forEach { dep ->
+            val manifest = nodeModules.resolve("$dep/package.json")
+            check(manifest.isFile) {
+                "bundleServer: '$dep' is missing from the bundled server " +
+                    "($manifest). Run `npm install` at the repo root and re-check " +
+                    "the closure with `npm ls --workspace server --omit=dev --all`."
+            }
+        }
+    }
 }
 
-// Place the bundled server INSIDE the plugin directory in the sandbox/zip, at
-// `<pluginName>/server/...`. EtyLspServerDescriptor resolves the entry point via
+// The server also loads the native napi parser by the RELATIVE path
+// `../../crates/ety-parser/index.js` (server/src/parser.js). Resolved from the
+// packaged server that is `<plugin>/server/src/`, so the parser must sit at
+// `<plugin>/crates/ety-parser/` — a sibling of server/ — for the path to hold;
+// like the node deps above, it lives outside the server tree and would not
+// otherwise travel with the plugin. We ship the napi loader + its prebuilt
+// `.node` binaries (Cargo sources, target/, and node_modules are not runtime
+// inputs and are excluded). The `.node` files are platform-specific: only the
+// architectures whose binaries have been built (via `npm run build:parser` on
+// each target) end up in the zip — a cross-platform release needs that build
+// matrix. The tripwire fails the build if NONE is present, so an unbuilt parser
+// can't silently ship a plugin that throws "Failed to load native binding".
+val parserOutDir = layout.buildDirectory.dir("crates/ety-parser")
+val bundleParser = tasks.register<Copy>("bundleParser") {
+    from(rootProject.projectDir.resolve("../crates/ety-parser")) {
+        include("index.js", "package.json", "*.node")
+    }
+    into(parserOutDir)
+
+    val outDir = parserOutDir
+    doLast {
+        val natives = outDir.get().asFile.listFiles { f -> f.extension == "node" }.orEmpty()
+        check(natives.isNotEmpty()) {
+            "bundleParser: no native parser binary (*.node) was bundled from " +
+                "crates/ety-parser. Run `npm run build:parser` (per target platform) " +
+                "before packaging — without it the server throws \"Failed to load " +
+                "native binding\" at startup."
+        }
+    }
+}
+
+// Place the bundled server + parser INSIDE the plugin directory in the
+// sandbox/zip, at `<pluginName>/server/...` and `<pluginName>/crates/ety-parser/`.
+// EtyLspServerDescriptor resolves the entry point via
 // PathManager.getPluginsPath()/ety-jetbrains/server/src/main.js, so the layout
-// here must land at exactly that path (pluginName == "ety-jetbrains"). Wiring
-// bundleServer's output through `from` also establishes the task dependency, so
-// the copy is no longer orphaned the way a bare dependsOn left it.
+// here must land at exactly that path (pluginName == "ety-jetbrains"); the
+// parser's sibling location then satisfies the server's ../../crates path. Wiring
+// the bundle tasks' output through `from` also establishes the task dependency,
+// so the copies are no longer orphaned the way a bare dependsOn left them.
 tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(bundleServer) {
         into(pluginName.map { "$it/server" })
+    }
+    from(bundleParser) {
+        into(pluginName.map { "$it/crates/ety-parser" })
     }
 }
 
