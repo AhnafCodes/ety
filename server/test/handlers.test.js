@@ -152,6 +152,25 @@ describe('pushDiagnostics', () => {
         pushDiagnostics(syntheticState(), deps, PATH);
         expect(deps.connection.sendDiagnostics.mock.calls[0][0].diagnostics[0].severity).toBe(4);
     });
+
+    it('`// T: ignore` suppresses every diagnostic whose original line carries it', () => {
+        // 'x' (offset 26) remaps to original line 0; an ignore on line 0 drops it.
+        const state = syntheticState();
+        state.lineMaps.get(PATH).ignoredLines = new Set([0]);
+        const deps = mockDeps([{ start: 26, length: 1, messageText: 'nope', category: 1 }]);
+        pushDiagnostics(state, deps, PATH);
+        // Still publishes (to clear stale squiggles), but with no diagnostics.
+        expect(deps.connection.sendDiagnostics).toHaveBeenCalledTimes(1);
+        expect(deps.connection.sendDiagnostics.mock.calls[0][0].diagnostics).toEqual([]);
+    });
+
+    it('an ignore on a DIFFERENT line leaves the diagnostic alone (same-line only)', () => {
+        const state = syntheticState();
+        state.lineMaps.get(PATH).ignoredLines = new Set([5]);
+        const deps = mockDeps([{ start: 26, length: 1, messageText: 'nope', category: 1 }]);
+        pushDiagnostics(state, deps, PATH);
+        expect(deps.connection.sendDiagnostics.mock.calls[0][0].diagnostics).toHaveLength(1);
+    });
 });
 
 describe('onHover (mapping, stubbed quick info)', () => {

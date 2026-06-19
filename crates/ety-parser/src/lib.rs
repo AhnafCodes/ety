@@ -26,7 +26,7 @@ pub struct EtyAnnotation {
     pub ety_start_offset: u32,
     /// End (exclusive) of the `// T:` comment.
     pub ety_end_offset: u32,
-    /// "function" | "variable" | "property" | "class" | "import" | "param" | "return"
+    /// "function" | "variable" | "property" | "class" | "import" | "param" | "return" | "ignore"
     pub kind: String,
     /// Declaration name; empty for anonymous functions/classes and imports.
     /// For "param" it is the parameter name.
@@ -304,6 +304,14 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
     let (returns, candidates): (Vec<_>, Vec<_>) =
         rest.into_iter().partition(|(_, _, p)| p.starts_with("=>"));
 
+    // `// T: ignore` (and the shorthand `// T:i`) is a diagnostic-suppression
+    // directive, not a type. Like imports/returns it attaches to no AST node,
+    // so pull it out before node matching. node_start_offset is the comment's
+    // own start, so the transformer derives the directive's line from it; the
+    // handler then drops any diagnostic whose remapped original line matches.
+    let (ignores, candidates): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|(_, _, p)| *p == "ignore" || *p == "i");
+
     let mut visitor =
         EtyVisitor { source, annotations: candidates, results: Vec::new(), fn_bodies: Vec::new() };
     visitor.visit_program(&ret.program);
@@ -341,6 +349,15 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
             doc: String::new(),
         })
         .collect();
+    results.extend(ignores.into_iter().map(|(s, e, p)| EtyAnnotation {
+        node_start_offset: s,
+        ety_start_offset: s,
+        ety_end_offset: e,
+        kind: "ignore".to_string(),
+        name: String::new(),
+        ety: p.to_string(),
+        doc: String::new(),
+    }));
     results.extend(visitor.results);
 
     // Dedupe by ety_start_offset, keeping the first match (Gate 1 mandate).
@@ -686,5 +703,46 @@ mod tests {
         assert_eq!(params.len(), 1);
         assert_eq!((params[0].name.as_str(), params[0].ety.as_str()), ("n", "number"));
         assert!(result.iter().all(|a| a.kind != "return"));
+    }
+
+    // --- ignore directive (`// T: ignore` / `// T:i`) ---
+
+    #[test]
+    fn ignore_directive_is_standalone_and_binds_to_no_node() {
+        // A trailing `// T: ignore` must NOT bind to the declaration the way a
+        // type annotation would: it is a directive whose node_start_offset is
+        // its own comment start, so the transformer can derive its line.
+        let source = "badCall(\"oops\"); // T: ignore\n";
+        let result = parse_source(source);
+        assert_eq!(result.len(), 1);
+        let a = &result[0];
+        assert_eq!(a.kind, "ignore");
+        assert_eq!(a.ety, "ignore");
+        assert_eq!(a.name, "");
+        let cs = source.find("//").unwrap() as u32;
+        assert_eq!(a.node_start_offset, cs);
+        assert_eq!(a.ety_start_offset, cs);
+    }
+
+    #[test]
+    fn ignore_shorthand_i_is_recognized() {
+        // `// T:i` and `// T: i` both normalize to the payload "i".
+        for source in ["badCall(); // T:i\n", "badCall(); // T: i\n"] {
+            let result = parse_source(source);
+            assert_eq!(result.len(), 1, "source: {source:?}");
+            assert_eq!(result[0].kind, "ignore");
+            assert_eq!(result[0].ety, "i");
+        }
+    }
+
+    #[test]
+    fn ignore_does_not_shadow_a_type_named_with_a_longer_payload() {
+        // Only the EXACT payloads "ignore"/"i" are directives; a type that
+        // merely contains them (e.g. "ignored") is a normal annotation.
+        let source = "let x = 1; // T: ignored\n";
+        let result = parse_source(source);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].kind, "variable");
+        assert_eq!(result[0].ety, "ignored");
     }
 }

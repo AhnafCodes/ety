@@ -1,0 +1,16 @@
+{
+  "name": "ignore-directive",
+  "description": "`// T: ignore` is a diagnostic-suppression directive: standalone (binds to no node), node_start_offset = its own comment start so the transformer can derive its line.",
+  "source": "badCall(\"oops\"); // T: ignore\n",
+  "expected": [
+    {
+      "nodeStartOffset": 17,
+      "etyStartOffset": 17,
+      "etyEndOffset": 29,
+      "kind": "ignore",
+      "name": "",
+      "ety": "ignore",
+      "doc": ""
+    }
+  ]
+}

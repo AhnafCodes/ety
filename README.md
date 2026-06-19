@@ -118,6 +118,23 @@ const boxed = new Box(42);           // T: Box{number}
 
 Each becomes a JSDoc line in the virtual document — `// T: number` → `/** @type {number} */`, the class `// T: {T}` → `/** @template T */`, and a function signature is given synthetic parameter names where you omit them (`(number) => number` → `(p0: number) => number`). You never see any of that; it lives only in the document handed to TypeScript.
 
+### Suppressing diagnostics
+
+A `// T: ignore` directive silences every diagnostic on the line it sits on —
+the ety analog of `@ts-ignore`, but trailing (same line) rather than above, to
+match the "never look above a node" rule. `// T:i` is the shorthand.
+
+```javascript
+const user = getUser();
+user.naem;                 // T: ignore   (typo silenced on this line)
+widen(0.1 + 0.2);          // T:i         (shorthand)
+```
+
+It injects nothing into the virtual document; it only marks its line so the
+language server drops any diagnostic that maps back to it. Only the exact
+payloads `ignore` and `i` are directives — a type literally named `ignored`
+is still a normal annotation.
+
 ## Project layout
 
 ```
