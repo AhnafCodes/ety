@@ -109,6 +109,23 @@ describe('transformDocument invariants', () => {
         expect(lineKind.get(1)).toMatchObject({ kind: 'import' });
     });
 
+    it('`// T: ignore` injects nothing and records its line in ignoredLines', () => {
+        const source = 'let count = 0; // T: number\nbadCall("oops"); // T: ignore\n';
+        const { virtualSource, ignoredLines, lineKind } = transform(source);
+        // The directive line is collected (line 1) but the type annotation is not.
+        expect([...ignoredLines]).toEqual([1]);
+        // It is purely additive-free: no JSDoc is injected for the directive,
+        // only for the real `// T: number` on line 0.
+        const jsdoc = [...lineKind.values()].filter(k => k.kind === 'jsdoc');
+        expect(jsdoc).toHaveLength(1);
+        expect(virtualSource).toBe('/** @type {number} */\n' + source);
+    });
+
+    it('the `// T:i` shorthand is also collected as an ignore line', () => {
+        const { ignoredLines } = transform('badCall(); // T:i\n');
+        expect([...ignoredLines]).toEqual([0]);
+    });
+
     it('a source with no annotations passes through untouched', () => {
         const source = 'const plain = 1;\nfunction f() { return 2; }\n';
         const { virtualSource, vToO, oToV } = transform(source);
