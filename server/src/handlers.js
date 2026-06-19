@@ -93,10 +93,10 @@ export function processDocument(state, deps, document) {
     const path = uriToPath(document.uri);
     try {
         const source = document.getText();
-        const { virtualSource, vToO, oToV, lineKind } = transformDocument(source, deps.parse_ety(source));
+        const { virtualSource, vToO, oToV, lineKind, ignoredLines } = transformDocument(source, deps.parse_ety(source));
         state.virtualDocs.set(path, virtualSource);
         state.lineMaps.set(path, {
-            vToO, oToV, lineKind,
+            vToO, oToV, lineKind, ignoredLines,
             lineIndex: new LineIndex(virtualSource),
             uri: document.uri,
         });
@@ -120,6 +120,7 @@ export function pushDiagnostics(state, deps, path) {
     const entry = state.lineMaps.get(path);
     if (!entry) return; // closed, or debounce fired before first processDocument
     const { vToO, lineIndex, lineKind, uri } = entry;
+    const ignoredLines = entry.ignoredLines ?? new Set();
 
     // Syntactic diagnostics catch the user's plain JS syntax errors;
     // getSemanticDiagnostics alone silently drops parse errors (pinned in
@@ -164,7 +165,12 @@ export function pushDiagnostics(state, deps, path) {
                 message: ts.flattenDiagnosticMessageText(d.messageText, '\n'),
                 severity: tsCategoryToSeverity(d.category),
             };
-        });
+        })
+        // `// T: ignore` suppression: drop any diagnostic whose ORIGINAL start
+        // line carries the directive. range.start.line is already in original
+        // coordinates (code lines remapped via vToO; injected lines collapsed
+        // onto their // T: commentRange), so this one check covers both.
+        .filter(d => !ignoredLines.has(d.range.start.line));
 
     deps.connection.sendDiagnostics({ uri, version: state.versions.get(path), diagnostics });
 }

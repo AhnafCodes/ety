@@ -316,8 +316,15 @@ export function transformDocument(source, annotations) {
         },
     }));
 
-    const importAnnotations = withLines.filter(a => a.ety.startsWith('import '));
-    const typeAnnotations   = withLines.filter(a => !a.ety.startsWith('import '));
+    // `// T: ignore` directives inject nothing — they only record their line so
+    // pushDiagnostics can drop any diagnostic that remaps onto it (same-line
+    // suppression). Collect those lines, then exclude the directives from both
+    // the import and type streams.
+    const ignoredLines = new Set(
+        withLines.filter(a => a.kind === 'ignore').map(a => a.originalLine),
+    );
+    const importAnnotations = withLines.filter(a => a.kind !== 'ignore' && a.ety.startsWith('import '));
+    const typeAnnotations   = withLines.filter(a => a.kind !== 'ignore' && !a.ety.startsWith('import '));
 
     const virtualLines = [];
     const vToO = new Map();     // virtualLine -> originalLine
@@ -414,5 +421,6 @@ export function transformDocument(source, annotations) {
         vToO,
         oToV,
         lineKind,
+        ignoredLines,
     };
 }
