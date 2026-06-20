@@ -10,9 +10,23 @@
   "main": "./src/extension.js",
   "activationEvents": [
     "onLanguage:javascript",
-    "onLanguage:javascriptreact"
+    "onLanguage:javascriptreact",
+    "onLanguage:html",
+    "workspaceContains:**/*.{jsp,aspx,tpl,ftl}"
   ],
-  "contributes": {},
+  "contributes": {
+    "configuration": {
+      "title": "ety",
+      "properties": {
+        "ety.scriptHosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["html"],
+          "markdownDescription": "File extensions whose `<script>` blocks ety analyzes. `.html` works by default; add server-side template formats like `jsp`, `aspx`, `tpl`, `ftl` to enable type-checking of their `<script>` JavaScript. **Reload the window after changing** (the document selector is fixed per session)."
+        }
+      }
+    }
+  },
   "scripts": {
     "test": "vitest run",
     "test:e2e": "node test/runTest.js"

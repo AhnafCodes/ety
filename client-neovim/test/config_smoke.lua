@@ -57,13 +57,30 @@ check('build_cmd[2] points at server/src/main.js',
   ends_with(cmd[2], 'server/src/main.js'), tostring(cmd[2]))
 check('build_cmd[3] selects stdio transport', cmd[3] == '--stdio')
 
--- 4. The server claims exactly JavaScript and JSX, nothing else.
+-- 4. By default the server claims JS, JSX, and the html host (Milestone 13).
 local cfg = ety.config({ node = 'node' })
-check('filetypes are exactly javascript + javascriptreact',
-  vim.deep_equal(cfg.filetypes, { 'javascript', 'javascriptreact' }),
+check('filetypes default to javascript + javascriptreact + html',
+  vim.deep_equal(cfg.filetypes, { 'javascript', 'javascriptreact', 'html' }),
   vim.inspect(cfg.filetypes))
 check('config reuses the stdio cmd',
   type(cfg.cmd) == 'table' and cfg.cmd[3] == '--stdio')
+
+-- 5. The default host set is exactly { 'html' }, handed to the server as
+--    init_options.scriptHosts.
+check('init_options.scriptHosts defaults to { html }',
+  type(cfg.init_options) == 'table'
+    and vim.deep_equal(cfg.init_options.scriptHosts, { 'html' }),
+  vim.inspect(cfg.init_options))
+
+-- 6. Opting a template format in widens both the filetypes and scriptHosts,
+--    normalized (dot-stripped, lowercased, de-duped).
+local opted = ety.config({ node = 'node', script_hosts = { 'html', '.TPL', 'tpl' } })
+check('script_hosts opt-in normalizes and de-dupes',
+  vim.deep_equal(opted.init_options.scriptHosts, { 'html', 'tpl' }),
+  vim.inspect(opted.init_options.scriptHosts))
+check('opted filetypes include the template host',
+  vim.deep_equal(opted.filetypes, { 'javascript', 'javascriptreact', 'html', 'tpl' }),
+  vim.inspect(opted.filetypes))
 
 if failures > 0 then
   io.stderr:write(('\n%d check(s) failed\n'):format(failures))

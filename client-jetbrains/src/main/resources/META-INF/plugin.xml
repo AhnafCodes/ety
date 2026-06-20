@@ -6,8 +6,11 @@
     <description><![CDATA[
         Types in comments for plain JavaScript. Provides TypeScript-grade
         diagnostics and hovers for <code>// T:</code> annotations in untouched
-        <code>.js</code>/<code>.jsx</code> files, by driving the ety language
-        server over LSP. No build step, no <code>.ts</code> files.
+        <code>.js</code>/<code>.jsx</code> files — and inside <code>&lt;script&gt;</code>
+        blocks of <code>.html</code> (with <code>.jsp</code>/<code>.aspx</code>/<code>.tpl</code>/<code>.ftl</code>
+        opt-in via the <code>ETY_SCRIPT_HOSTS</code> env var) — by driving the ety
+        language server over LSP. No build step, no <code>.ts</code> files.
+        Requires Node on PATH (or set <code>ETY_NODE</code>).
     ]]></description>
 
     <!-- Core platform. -->
