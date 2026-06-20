@@ -1589,6 +1589,65 @@ let b = bar();
 
 ---
 
+## Embedded Host Documents (`<script>` tags)
+
+`// T:` annotations are not limited to `.js`/`.jsx` source — jty also processes the
+JavaScript inside `<script>` blocks of **host documents**. `.html` is supported by
+default; the server-side template formats `.jsp`, `.aspx`, `.tpl`, and `.ftl` are
+**opt-in** (the static parts of their `<script>` bodies are JavaScript, but they also
+interleave template expressions that are not, so they ship behind the `scriptHosts`
+setting rather than on by default).
+
+| Host | Support | Notes |
+|------|---------|-------|
+| `.html` | ✅ Core | `<script>` bodies are plain JavaScript |
+| `.jsp` / `.aspx` / `.tpl` / `.ftl` | Opt-in (`scriptHosts`) | in-script template expressions are neutralized before analysis |
+
+```html
+<!-- index.html -->
+<!DOCTYPE html>
+<html>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      let count = 0;            // T: number
+      const cache = new Map();  // T: Map{string, User}
+
+      count = "oops";          // ← squiggles here, on this real HTML line
+    </script>
+  </body>
+</html>
+```
+
+**What is and isn't analyzed:**
+
+- **Only `<script>` … `</script>` bodies** whose type is JavaScript (`type="module"`,
+  `type="text/javascript"`, or no `type`). The host markup itself is opaque.
+- **Ignored:** inline event-handler attributes (`onclick="…"`), `<script src="…">`
+  with no body, and non-JS script types (`application/json`, `importmap`, `text/template`).
+- **HTML5 raw-text rule:** a script body ends at the first `</script`, even when it
+  appears inside a JavaScript string — `const s = "</script>"` closes the element.
+
+**Position fidelity (line- and column-parallel).** jty analyzes a projection of the
+host that keeps every `<script>` line byte-for-byte (indentation included) and blanks
+everything outside script bodies. Because line *and* column are preserved, diagnostics
+and hovers map onto the **original host file** unchanged — a type error squiggles its
+real `.html` line, not the `<script>` tag or the `// T:` comment.
+
+**Template expressions in opt-in formats.** For `.jsp`/`.aspx`/`.tpl`/`.ftl`, recognized
+server-side delimiters that appear *inside* a script body (`${…}`, `<%…%>`, `<%=…%>`,
+`<#…>`, `[#…]`) are replaced with width-preserving inert filler before analysis, so the
+static JavaScript still type-checks without the template language itself being typed.
+
+**Configuration.** The recognized host extensions are controlled by `scriptHosts`
+(default `["html"]`); add the template extensions to enable them:
+
+```json
+{ "scriptHosts": ["html", "jsp", "aspx", "tpl", "ftl"] }
+```
+
+---
+
 ## Description Syntax
 
 **Standalone description (functions, classes, typedefs):**
@@ -2033,6 +2092,7 @@ jty inject src/                # Inject JSDoc into source files (inline casts)
 {
   "include": ["src/**/*.js"],
   "exclude": ["**/*.test.js", "**/*.spec.js"],
+  "scriptHosts": ["html"],
   "output": {
     "dir": ".types",
     "ext": "-ty.jsdoc.js"
@@ -2219,6 +2279,7 @@ The following features are explicitly **not supported** in jty v0.2:
 | Enum | ✅ (values retained) |
 | Type imports | ✅ (rewritten in stubs) |
 | Barrel exports | ✅ (export *, export {}) |
+| Embedded `<script>` JS | ✅ (`.html` default; `.jsp`/`.aspx`/`.tpl`/`.ftl` opt-in via `scriptHosts`) |
 | Descriptions | ✅ |
 | JSDoc tags | ✅ (@deprecated, @throws, @see, etc.) |
 | Inline casts | ✅ (inject mode only) |
@@ -2245,6 +2306,12 @@ The following features are explicitly **not supported** in jty v0.2:
 ---
 
 ## Changelog
+
+### v0.1.3
+
+- Added Embedded Host Documents support — `// T:` annotations inside `<script>` blocks
+- `.html` supported by default; `.jsp`/`.aspx`/`.tpl`/`.ftl` opt-in via `scriptHosts`
+- Added `scriptHosts` configuration option (default `["html"]`)
 
 ### v0.1.2
 
