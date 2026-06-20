@@ -49,6 +49,23 @@ start and wait on stdin.
    there are **no** spurious JSX errors (the server type-checks JSX without
    transforming it).
 
+## §4b — Embedded `<script>` JS in `.html` (Milestone 13)
+
+The default `setup()` claims the `html` filetype (`script_hosts` defaults to
+`{ 'html' }`; pass `require('ety').setup({ script_hosts = { 'html', 'tpl' } })`
+to opt template formats in).
+
+1. `nvim fixtures/workspace/embedded.html`
+2. `:lua =vim.lsp.get_clients({ name = 'ety', bufnr = 0 })[1] ~= nil` → `true`
+   (the client attaches to the `.html` buffer).
+3. `:lua =vim.diagnostic.get(0)` → exactly one diagnostic, with **`lnum = 6`** —
+   the `qty = "oops";` line *inside* the `<script>`, **not** the `<script>` tag
+   line, the `// T:` line, or any HTML line. Positions map back onto the real
+   `.html` file.
+4. Visually: `]d` jumps the cursor onto `qty` inside the script; the underline
+   sits there, and the surrounding HTML carries no squiggle.
+5. Cursor on `qty`, press `K` → the float shows **`number`**.
+
 ## §5 — Base-type completion (Milestone 9, negotiated server-side)
 
 1. In a `.js` buffer, type `let i = 0; // T:` and trigger completion after the

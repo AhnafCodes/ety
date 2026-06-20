@@ -84,6 +84,32 @@ export const el = <div className="x">{label}</div>;
 - [ ] **No** spurious diagnostics on the `<div …>` JSX line itself.
 - [ ] Hover `label` → type **`number`**.
 
+## 4b. Embedded `<script>` JS in `.html` (Milestone 13)
+
+`.html` is claimed by default (the descriptor's `scriptHosts` defaults to
+`html`; set `ETY_SCRIPT_HOSTS=html,jsp,aspx,tpl,ftl` before launching to opt the
+template formats in). Open `fixtures/workspace/embedded.html`:
+```html
+<script>
+let qty = 0; // T: number
+qty = "oops";
+</script>
+```
+- [ ] A red squiggle appears under **`qty` on line 7** (the `qty = "oops"`
+      assignment *inside* the `<script>`), **not** on the `<script>` tag line,
+      the `// T:` line, or any HTML markup. This is the projection invariant: the
+      squiggle maps back onto the real `.html` line and column.
+- [ ] The message reads approximately *Type 'string' is not assignable to type
+      'number'.*
+- [ ] Hover `qty` inside the `<script>` → tooltip shows **`number`**.
+- [ ] The surrounding HTML (`<div>`, `<body>`, the `<script>` tag) draws **no**
+      diagnostics and no bogus hovers — only the script body is analyzed.
+- [ ] Fix it (`qty = 5;`) → the squiggle clears within ~a second; re-introduce →
+      it returns.
+- [ ] *(If templates enabled)* with `ETY_SCRIPT_HOSTS` including `tpl`, a `.tpl`
+      file's `<script>` behaves the same, and an in-script `${ ... }` does **not**
+      itself draw a diagnostic (it is neutralized before analysis).
+
 ## 5. Lifecycle / robustness
 
 - [ ] Open a `.js` file with **no `// T:` annotations** → no diagnostics, no
