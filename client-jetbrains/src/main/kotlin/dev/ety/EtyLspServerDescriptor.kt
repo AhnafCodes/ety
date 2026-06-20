@@ -1,5 +1,7 @@
 package dev.ety
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.project.Project
@@ -19,6 +21,18 @@ class EtyLspServerDescriptor(project: Project) :
     ProjectWideLspServerDescriptor(project, "ety") {
 
     override fun isSupportedFile(file: VirtualFile): Boolean = isEtyFile(file)
+
+    /**
+     * Hand the host extensions to the server as `initializationOptions`
+     * (Milestone 13), the same `ety.scriptHosts` list the VS Code client passes.
+     * The server projects those files' `<script>` blocks to line/column-parallel
+     * JS; client and server must agree on the set, so both read it from here /
+     * the setting.
+     */
+    override fun createInitializationOptions(): Any {
+        val hosts = JsonArray().apply { scriptHosts().forEach { add(it) } }
+        return JsonObject().apply { add("scriptHosts", hosts) }
+    }
 
     override fun createCommandLine(): GeneralCommandLine {
         val mainJs = serverEntryPoint()

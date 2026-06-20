@@ -45,6 +45,17 @@ With any plugin manager that puts this directory on the runtimepath
 accepts overrides; both are optional (it resolves `ETY_NODE`→PATH and a
 bundled-then-monorepo server path on its own).
 
+### Embedded `<script>` JS (`.html` + templates)
+
+ety also type-checks `// T:` inside `<script>` blocks of host documents.
+`.html` is on by default; opt server-side template formats in with
+`script_hosts` (extensions), which both attaches those filetypes and tells the
+server to project them:
+
+```lua
+require('ety').setup({ script_hosts = { 'html', 'jsp', 'tpl', 'ftl' } })
+```
+
 ### nvim-lspconfig users
 
 `require('ety').setup()` returns the resolved config table, so you can hand its
@@ -66,10 +77,11 @@ nvim fixtures/workspace/type-error.js
 ```
 
 `config_smoke.lua` asserts the resolved `cmd` is `{ node, …/server/src/main.js,
-'--stdio' }`, the `filetypes` are exactly `javascript`/`javascriptreact`, and
-the Node resolver honors `ETY_NODE`. It does **not** spawn the server (so Node
-need not be installed) and needs no GUI — mirroring the JetBrains descriptor
-smoke test.
+'--stdio' }`, the `filetypes` default to `javascript`/`javascriptreact`/`html`,
+`init_options.scriptHosts` defaults to `{ 'html' }` (widening when `script_hosts`
+is passed), and the Node resolver honors `ETY_NODE`. It does **not** spawn the
+server (so Node need not be installed) and needs no GUI — mirroring the JetBrains
+descriptor smoke test.
 
 `attach_diagnose.lua` drives the real server: it `setup()`s ety, opens
 `fixtures/workspace/type-error.js`, waits for the client to attach and publish,

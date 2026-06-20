@@ -14,6 +14,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { parse_ety } from './parser.js';
 import { createTsService } from './tsHost.js';
 import { createState, processDocument, onHover, onCompletion, onDidClose, uriToPath } from './handlers.js';
+import { resolveScriptHosts } from './embedded.js';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -21,6 +22,11 @@ const state = createState();
 const deps = { connection, parse_ety, tsService: null };
 
 connection.onInitialize(params => {
+    // Milestone 13: the host extensions whose `<script>` bodies ety analyzes.
+    // The client passes the `ety.scriptHosts` setting through initializationOptions
+    // (synchronous, no capability negotiation); onDidChangeConfiguration keeps it
+    // live. resolveScriptHosts defaults it to ['html'].
+    state.scriptHosts = resolveScriptHosts(params.initializationOptions?.scriptHosts);
     const rootUri = params.workspaceFolders?.[0]?.uri ?? params.rootUri;
     deps.tsService = createTsService({
         virtualDocs: state.virtualDocs,
@@ -53,6 +59,15 @@ documents.onDidChangeContent(({ document }) => processDocument(state, deps, docu
 documents.onDidClose(({ document }) => onDidClose(state, deps, document));
 connection.onHover(params => onHover(state, deps, params));
 connection.onCompletion(params => onCompletion(state, deps, params));
+
+// Live `ety.scriptHosts` changes (Milestone 13): re-read the setting and
+// re-project every open document so a newly-enabled host takes effect. The
+// client's document selector is fixed per session, so attaching a *new* file
+// type still needs a window reload — but already-open docs re-project here.
+connection.onDidChangeConfiguration(change => {
+    state.scriptHosts = resolveScriptHosts(change?.settings?.ety?.scriptHosts);
+    for (const document of documents.all()) processDocument(state, deps, document);
+});
 
 documents.listen(connection);
 connection.listen();

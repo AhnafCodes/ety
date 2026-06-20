@@ -11,6 +11,7 @@ import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
 import { fileURLToPath } from 'node:url';
 import { LineIndex, transformDocument } from './transform.js';
 import { tsCategoryToSeverity } from './tsHost.js';
+import { detectScriptHost, extractScriptProjection, hostScriptPath } from './embedded.js';
 
 export const DEBOUNCE_MS = 200;
 
@@ -81,7 +82,21 @@ export function createState() {
         lineMaps: new Map(),    // path -> { vToO, oToV, lineKind, lineIndex, uri }
         versions: new Map(),    // path -> document version (TS cache invalidation)
         diagTimers: new Map(),  // path -> debounce timer for diagnostics
+        // Host extensions whose `<script>` bodies ety analyzes (Milestone 13).
+        // .html on by default; templates opt-in. main.js overwrites this from
+        // the `ety.scriptHosts` setting; default kept here so unit tests and a
+        // configuration-less client still get .html.
+        scriptHosts: ['html'],
     };
+}
+
+// The state-map key for a document. Host documents (.html and configured
+// templates) get a synthetic `.jsx` key so TypeScript classifies the projection
+// as JS; everything else keys on its plain path. Every handler resolves the key
+// through here so all call sites agree (Milestone 13).
+function resolvePath(state, uri) {
+    const path = uriToPath(uri);
+    return detectScriptHost(uri, state.scriptHosts) ? hostScriptPath(path) : path;
 }
 
 // Parse + transform synchronously (cheap; hover always has fresh maps), then
@@ -90,9 +105,15 @@ export function createState() {
 // keep the previous virtual doc and maps so hover keeps answering from the
 // last good parse. Stale-but-working beats dead.
 export function processDocument(state, deps, document) {
-    const path = uriToPath(document.uri);
+    const path = resolvePath(state, document.uri);
     try {
-        const source = document.getText();
+        // Host documents (.html, configured templates) are pre-projected to a
+        // line- and column-parallel JS buffer; the parser, transformer, TS host,
+        // and every map below run unchanged over it (Milestone 13).
+        const hostKind = detectScriptHost(document.uri, state.scriptHosts);
+        const source = hostKind
+            ? extractScriptProjection(document.getText(), hostKind).jsSource
+            : document.getText();
         const { virtualSource, vToO, oToV, lineKind, ignoredLines } = transformDocument(source, deps.parse_ety(source));
         state.virtualDocs.set(path, virtualSource);
         state.lineMaps.set(path, {
@@ -180,7 +201,7 @@ export function pushDiagnostics(state, deps, path) {
 // no special handling: the comment line exists verbatim in the virtual doc,
 // so the query lands in comment trivia and TS returns undefined.
 export function onHover(state, deps, { textDocument, position }) {
-    const path = uriToPath(textDocument.uri);
+    const path = resolvePath(state, textDocument.uri);
     const entry = state.lineMaps.get(path);
     if (!entry) return null; // not yet processed, or closed (race guard)
     const { oToV, vToO, lineIndex } = entry;
@@ -214,7 +235,7 @@ export function onHover(state, deps, { textDocument, position }) {
 // outside BASE_TYPES yields nothing: this is deliberately a sliver, not general
 // completion (implementation-plan.md, Milestone 9).
 export function onCompletion(state, deps, { textDocument, position }) {
-    const path = uriToPath(textDocument.uri);
+    const path = resolvePath(state, textDocument.uri);
     const entry = state.lineMaps.get(path);
     if (!entry) return []; // not yet processed, or closed (race guard)
     const { oToV, lineKind, lineIndex } = entry;
@@ -270,7 +291,7 @@ export function onCompletion(state, deps, { textDocument, position }) {
 // Prevent unbounded growth: drop all per-document state on close, cancel any
 // pending debounce, and clear the document's squigglies in the editor.
 export function onDidClose(state, deps, document) {
-    const path = uriToPath(document.uri);
+    const path = resolvePath(state, document.uri);
     clearTimeout(state.diagTimers.get(path));
     state.diagTimers.delete(path);
     state.virtualDocs.delete(path);
