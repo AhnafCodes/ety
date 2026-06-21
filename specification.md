@@ -47,7 +47,7 @@ function createUser(name, email, role) {
 ```javascript
 function createUser(name, email, role) {
 // T: (string, string, Role?) => User
-// T: * Creates a new user with the given details
+// T: # Creates a new user with the given details
 // T:  @throws: ErrorType - If email is invalid
     return {
         id: crypto.randomUUID(),
@@ -91,7 +91,7 @@ function filter(items, predicate) {
 ```javascript
 function filter(items, predicate) {
 // T: {T}(T[], (T) => boolean) => T[]
-// T: * Filters an array based on a predicate
+// T: # Filters an array based on a predicate
     return items.filter(predicate);
 }
 ```
@@ -139,13 +139,13 @@ function filter(items, predicate) {
 
 ```javascript
 // T: typedef User = { id: string, name: string, email: string, role: Role }
-// T: * A registered user in the system
+// T: # A registered user in the system
 
 // T: typedef Role = 'admin' | 'user' | 'guest'
-// T: * User permission level
+// T: # User permission level
 
 // T: callback OnUserChange = (user: User, prev: User | null) => void
-// T: * Called when user data changes
+// T: # Called when user data changes
 ```
 
 </td>
@@ -182,7 +182,7 @@ async function fetchJson(url, options) {
 ```javascript
 async function fetchJson(url, options) {
 // T: {T}(string, RequestInit?) => T
-// T: * Fetches data from an API endpoint
+// T: # Fetches data from an API endpoint
     const res = await fetch(url, options);
     return res.json();
 }
@@ -240,7 +240,7 @@ class Box {
 ```javascript
 class Box {
 // T: @template T
-// T: * A generic data container
+// T: # A generic data container
 
     value;  // T: T - The contained value
     
@@ -251,7 +251,7 @@ class Box {
     
     map(fn) {
         // T: {U}((T) => U) => Box{U}
-        // T: * Transforms the value
+        // T: # Transforms the value
         return new Box(fn(this.value));
     }
 }
@@ -655,7 +655,7 @@ export const Config = {};
 
 > The inline-object form carries `?` (optional) and `readonly` through verbatim — both are valid inside a TypeScript object type. (An earlier draft wrote `@property {string} baseUrl @readonly`, which does **not** work: text after a `@property` name is parsed as the property *description*, not a modifier, so per-property `readonly` is unavailable in the `@property` form. Inline-object emission is what makes `readonly` expressible.)
 
-**With a description** (reusing the ` - ` convention, same as `param`/`type` annotations — no separate `// T: *` continuation line):
+**With a description** (reusing the ` - ` convention, same as `param`/`type` annotations — no separate `// T: #` continuation line):
 ```javascript
 // T: typedef User = { id: string, name: string, age: number } - A registered user in the system
 ```
@@ -814,7 +814,7 @@ function logMessage(msg) {
 ```javascript
 function add(a, b) {
 // T: (number, number) => number
-// T: * Adds two numbers together
+// T: # Adds two numbers together
     return a + b;
 }
 ```
@@ -1153,7 +1153,7 @@ export function onClick(event) {}
 ```javascript
 
 class User {
-// T: * Represents a system user    
+// T: # Represents a system user    
     name;  // T: string - Display name
     id;    // T: string @readonly - Unique identifier
     
@@ -1165,7 +1165,7 @@ class User {
     
     greet() {
     // T: () => string
-    // T: * Returns a greeting message
+    // T: # Returns a greeting message
         return `Hello, ${this.name}`;
     }
     
@@ -1219,7 +1219,7 @@ export class User {
 ```javascript
 
 class Admin extends User {
-// T: * Administrator with elevated permissions
+// T: # Administrator with elevated permissions
 
     permissions;  // T: string[] - Granted permissions
     
@@ -1272,7 +1272,7 @@ export class Admin extends User {
 ```javascript
 
 class Box {
-// T: * A generic container class
+// T: # A generic container class
 // T: @template T
     value;  // T: T
     
@@ -1319,7 +1319,7 @@ export class Box {
 ```javascript
 
 class Resource {
-// T: * @implements {Disposable}
+// T: # @implements {Disposable}
     dispose() {
         // T: ()
         cleanup();
@@ -1579,7 +1579,7 @@ static JavaScript still type-checks without the template language itself being t
 ```javascript
 function calculate(x) {
 // T: (number) => number
-// T: * Calculates using complex formula
+// T: # Calculates using complex formula
 // T: @deprecated: Use calculateV2 instead
 // T: @throws: Error - When x is negative
 // T: @see: calculateV2
@@ -1866,7 +1866,7 @@ The setting is read at `initialize` and kept live via `workspace/didChangeConfig
 // T: typedef Role = 'admin' | 'user' | 'guest' - User permission level
 
 // T: callback OnUserChange = (user: User, prev: User | null) => void
-// T: * Called when user data changes
+// T: # Called when user data changes
 ```
 
 > ⚠️ **Current behavior:** `typedef` is [planned for Milestone 14](#type-definitions) and `callback` is deferred — neither is implemented yet. These standalone `// T:` lines bind to no JavaScript node, so the parser currently emits **no annotations** and the virtual document is **byte-for-byte identical to the source above** — `User`, `Role`, and `OnUserChange` do not resolve yet, and the imports of them in `user-service.js` below would be unresolved. The block below shows the *planned* Milestone 14 projection for the `typedef`s (and the deferred shape for the `callback`).
@@ -1905,7 +1905,7 @@ const subscribers = new Set();  // T: Set{OnUserChange}
 
 function createUser(name, email, role) {
 // T: (name: string, email: string, role?: Role) => User
-// T: * Creates a new user with the given details
+// T: # Creates a new user with the given details
 // T: @throws: Error - If email is invalid
     return {
         id: crypto.randomUUID(),
@@ -2074,7 +2074,7 @@ The following features are explicitly **not supported** in Ety v0.2:
 - Distributed as editor plugins: VS Code, JetBrains, and Neovim.
 - Inline `as` casts marked **deferred** (incompatible with the line-only/immutable-source invariants).
 - Documented that `typedef` and `callback` are **not yet implemented** — the parser binds annotations only to real AST nodes, and standalone `// T:` declarations are not emitted. Their sections now describe planned syntax.
-- **`typedef` planned design pinned to Milestone 14 / Gate 12.** The projection now uses an **inline object type** (`@typedef {{ … }} Name`, not `@typedef {Object}` + `@property`), so `readonly` and nesting carry through verbatim; descriptions reuse the existing ` - ` convention (not a `// T: *` continuation line); the synthetic `export const Name` binding is hoisted to module scope; and `typedef` is a reserved leading word alongside `ignore`/`i`. The invalid per-property `@readonly` form was corrected. `callback` remains deferred and follows the same node-less mechanism.
+- **`typedef` planned design pinned to Milestone 14 / Gate 12.** The projection now uses an **inline object type** (`@typedef {{ … }} Name`, not `@typedef {Object}` + `@property`), so `readonly` and nesting carry through verbatim; descriptions reuse the existing ` - ` convention (not a `// T: #` continuation line); the synthetic `export const Name` binding is hoisted to module scope; and `typedef` is a reserved leading word alongside `ignore`/`i`. The invalid per-property `@readonly` form was corrected. `callback` remains deferred and follows the same node-less mechanism.
 
 ### v0.1.3
 
