@@ -16,6 +16,8 @@ function createUser(name, role) {
 
 `count = "oops"` now squiggles. Hovering `createUser` shows the full signature. The file on disk stays plain JavaScript that runs anywhere.
 
+⚠️ Note: Ety is under active development. Some features are not yet finalized
+
 ## Why? ety - EcmaScript Type Comments.
 
 Ety is inspired from Python's Type Comments, a Hidden GEM(first form of hinting was the type comment (PEP 484)).
