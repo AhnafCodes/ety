@@ -47,7 +47,7 @@ function createUser(name, email, role) {
 ```javascript
 function createUser(name, email, role) {
 // T: (string, string, Role?) => User
-// T: * Creates a new user with the given details
+// T: # Creates a new user with the given details
 // T:  @throws: ErrorType - If email is invalid
     return {
         id: crypto.randomUUID(),
@@ -91,7 +91,7 @@ function filter(items, predicate) {
 ```javascript
 function filter(items, predicate) {
 // T: {T}(T[], (T) => boolean) => T[]
-// T: * Filters an array based on a predicate
+// T: # Filters an array based on a predicate
     return items.filter(predicate);
 }
 ```
@@ -139,13 +139,13 @@ function filter(items, predicate) {
 
 ```javascript
 // T: typedef User = { id: string, name: string, email: string, role: Role }
-// T: * A registered user in the system
+// T: # A registered user in the system
 
 // T: typedef Role = 'admin' | 'user' | 'guest'
-// T: * User permission level
+// T: # User permission level
 
 // T: callback OnUserChange = (user: User, prev: User | null) => void
-// T: * Called when user data changes
+// T: # Called when user data changes
 ```
 
 </td>
@@ -182,7 +182,7 @@ async function fetchJson(url, options) {
 ```javascript
 async function fetchJson(url, options) {
 // T: {T}(string, RequestInit?) => T
-// T: * Fetches data from an API endpoint
+// T: # Fetches data from an API endpoint
     const res = await fetch(url, options);
     return res.json();
 }
@@ -240,7 +240,7 @@ class Box {
 ```javascript
 class Box {
 // T: @template T
-// T: * A generic data container
+// T: # A generic data container
 
     value;  // T: T - The contained value
     
@@ -251,7 +251,7 @@ class Box {
     
     map(fn) {
         // T: {U}((T) => U) => Box{U}
-        // T: * Transforms the value
+        // T: # Transforms the value
         return new Box(fn(this.value));
     }
 }
@@ -608,7 +608,9 @@ There is no watch mode, no file watcher, and no regeneration step — those belo
 
 ## Type Definitions
 
-> ⚠️ **Not yet implemented (planned syntax).** `typedef` and `callback` are **not supported** by the current LSP implementation. The parser only attaches `// T:` annotations to real JavaScript AST nodes (functions, variables, properties, classes), and `typedef`/`callback` are written as *standalone* `// T:` lines bound to no node — so the parser never emits them and the transformer has no code path for them. The examples below (including the synthetic `const Name = {};` binding) describe the **removed stub-generator** prototype and document the *intended* future syntax, not present behavior. Until implemented, declare shared shapes inline (e.g. object types on a variable) or in a real `.d.ts`/JSDoc file.
+> ⚠️ **Planned — Milestone 14 / Gate 12 (`typedef`); `callback` still deferred.** Standalone `// T:` declarations bind to no JavaScript AST node, so they need the parser's *node-less* extraction path — the same partition that already emits `import`, `=>` return, and `// T: ignore` annotations from the comment stream before node matching. `typedef` is the next arm of that path (Milestone 14); `callback` (its function-type cousin) follows the identical mechanism and stays deferred until its own milestone. The projections below are the **planned** Milestone 14 output, not present behavior — until it lands, declare shared shapes inline (object types on a variable) or in a real `.d.ts`/JSDoc file.
+>
+> **Reserved leading word.** After payload normalization, a `// T:` whose first word is `typedef` is a *declaration*, never a type — joining `ignore`/`i` (see [Directives](#directives)) in the reserved set. `callback` will join it when implemented.
 
 ### Typedef
 
@@ -618,13 +620,10 @@ There is no watch mode, no file watcher, and no regeneration step — those belo
 // T: typedef Status = 'pending' | 'active' | 'closed'
 ```
 
-**Projects to (virtual document, with synthetic binding):**
+**Projects to (virtual document, with a synthetic binding hoisted to module scope):**
 ```javascript
 /**
- * @typedef {Object} User
- * @property {string} id
- * @property {string} name
- * @property {number} age
+ * @typedef {{ id: string, name: string, age: number }} User
  */
 export const User = {};
 
@@ -639,41 +638,40 @@ export const ID = {};
 export const Status = {};
 ```
 
-**With optional and only properties:**
+The object body is emitted as an **inline object type** (`@typedef {{ … }} Name`) — exactly what `convertGenerics` already produces for an object payload. It type-checks identically to the expanded `@typedef {Object}` + `@property` form, but preserves `readonly`, nests for free, and needs no property-splitting. (`@property` expansion is a possible future formatting option for richer per-property hover.) The synthetic `export const Name = {}` makes the type resolvable across files via `// T: import`; it is **hoisted to module scope** (beside the import hoist), so a `typedef` written inside a function body still emits a legal top-level `export`.
+
+**With optional and readonly properties:**
 ```javascript
-// T: typedef Config = { apiKey: string, timeout?: number, baseUrl: string @readonly }
+// T: typedef Config = { apiKey: string, timeout?: number, readonly baseUrl: string }
 ```
 
 **Generates:**
 ```javascript
 /**
- * @typedef {Object} Config
- * @property {string} apiKey
- * @property {number} [timeout]
- * @property {string} baseUrl @readonly
+ * @typedef {{ apiKey: string, timeout?: number, readonly baseUrl: string }} Config
  */
 export const Config = {};
 ```
 
-**With descriptions:**
+> The inline-object form carries `?` (optional) and `readonly` through verbatim — both are valid inside a TypeScript object type. (An earlier draft wrote `@property {string} baseUrl @readonly`, which does **not** work: text after a `@property` name is parsed as the property *description*, not a modifier, so per-property `readonly` is unavailable in the `@property` form. Inline-object emission is what makes `readonly` expressible.)
+
+**With a description** (reusing the ` - ` convention, same as `param`/`type` annotations — no separate `// T: #` continuation line):
 ```javascript
-// T: typedef User = { id: string, name: string, age: number }
-// T: * A registered user in the system
+// T: typedef User = { id: string, name: string, age: number } - A registered user in the system
 ```
 
 **Generates:**
 ```javascript
 /**
  * A registered user in the system
- * @typedef {Object} User
- * @property {string} id
- * @property {string} name
- * @property {number} age
+ * @typedef {{ id: string, name: string, age: number }} User
  */
 export const User = {};
 ```
 
 ### Callback
+
+> ⏳ **Deferred (no milestone yet).** `callback` follows the same node-less extraction mechanism as `typedef` (Milestone 14) and will be specified when scheduled. The projections below are illustrative planned syntax, not present behavior.
 
 ```javascript
 // T: callback OnSuccess = (data: any) => void
@@ -816,7 +814,7 @@ function logMessage(msg) {
 ```javascript
 function add(a, b) {
 // T: (number, number) => number
-// T: * Adds two numbers together
+// T: # Adds two numbers together
     return a + b;
 }
 ```
@@ -1155,7 +1153,7 @@ export function onClick(event) {}
 ```javascript
 
 class User {
-// T: * Represents a system user    
+// T: # Represents a system user    
     name;  // T: string - Display name
     id;    // T: string @readonly - Unique identifier
     
@@ -1167,7 +1165,7 @@ class User {
     
     greet() {
     // T: () => string
-    // T: * Returns a greeting message
+    // T: # Returns a greeting message
         return `Hello, ${this.name}`;
     }
     
@@ -1221,7 +1219,7 @@ export class User {
 ```javascript
 
 class Admin extends User {
-// T: * Administrator with elevated permissions
+// T: # Administrator with elevated permissions
 
     permissions;  // T: string[] - Granted permissions
     
@@ -1274,7 +1272,7 @@ export class Admin extends User {
 ```javascript
 
 class Box {
-// T: * A generic container class
+// T: # A generic container class
 // T: @template T
     value;  // T: T
     
@@ -1321,7 +1319,7 @@ export class Box {
 ```javascript
 
 class Resource {
-// T: * @implements {Disposable}
+// T: # @implements {Disposable}
     dispose() {
         // T: ()
         cleanup();
@@ -1489,10 +1487,9 @@ export const VERSION = '1.0.0';  // T: string
 **Virtual document (JSDoc injected; re-exports untouched):**
 ```javascript
 /**
- * @typedef {Object} PublicAPI
- * @property {string} version
+ * @typedef {{ version: string }} PublicAPI
  */
-const PublicAPI = {};
+export const PublicAPI = {};
 
 export * from './user';
 export { Auth } from './auth';
@@ -1582,7 +1579,7 @@ static JavaScript still type-checks without the template language itself being t
 ```javascript
 function calculate(x) {
 // T: (number) => number
-// T: * Calculates using complex formula
+// T: # Calculates using complex formula
 // T: @deprecated: Use calculateV2 instead
 // T: @throws: Error - When x is negative
 // T: @see: calculateV2
@@ -1742,7 +1739,7 @@ NOTE: * Vs -  // T * Heading vs // T: number - Current count "-" is inline comme
 | `number?` | Optional (may be undefined) | `@param {number} [x]` |
 | `number \| null` | Nullable (may be null) | `@param {number \| null} x` |
 | `number \| undefined` | Explicitly undefined | `@param {number \| undefined} x` |
-| `number?` (in typedef) | Optional property | `@property {number} [x]` |
+| `x?: number` (in typedef body) | Optional property | preserved inline: `@typedef {{ x?: number }}` |
 
 > **Alignment with TypeScript:** The `?` modifier indicates optional (undefined), not nullable. Use explicit `| null` for nullable types.
 
@@ -1761,7 +1758,7 @@ Ety produces no files. For each open source document it constructs a **virtual d
    ─────────────────────────────────       ─────────────────────────────────
 
    src/models/user.js                       (virtual) src/models/user.js
-   // T: typedef User = {...}        ──►     /** @typedef {Object} User */
+   // T: typedef User = {...}        ──►     /** @typedef {{...}} User */
                                              ... User declarations ...
 
    src/services/auth.js                      (virtual) src/services/auth.js
@@ -1789,8 +1786,8 @@ Each source construct projects to JSDoc + a declaration in the virtual document 
 | `class Name { ... }` | JSDoc block per class/method/property |
 | `class Child extends Parent { ... }` | JSDoc block; `super()` semantics preserved from the real source |
 | `const x = value` / `let x = value` | `/** @type {…} */` above the declaration |
-| `// T: typedef Name = ...` | JSDoc `@typedef` + a synthetic `const Name` binding |
-| `// T: callback Name = ...` | JSDoc `@callback` + a synthetic `const Name` binding |
+| `// T: typedef Name = ...` | JSDoc `@typedef {{...}}` + a synthetic `export const Name` binding, hoisted to module scope (Milestone 14) |
+| `// T: callback Name = ...` | JSDoc `@callback` + a synthetic `const Name` binding (deferred) |
 | `const ENUM = { ... }` (with `// T: enum`) | `/** @enum {…} */` above the object (values retained) |
 | `export * from './path'` | left as-is; resolved against the real module graph |
 | `export { A, B } from './path'` | left as-is; resolved against the real module graph |
@@ -1864,35 +1861,29 @@ The setting is read at `initialize` and kept live via `workspace/didChangeConfig
 
 **Source:** `src/models/user.js`
 ```javascript
-// T: typedef User = { id: string, name: string, email: string, role: Role }
-// T: * A registered user in the system
+// T: typedef User = { id: string, name: string, email: string, role: Role } - A registered user in the system
 
-// T: typedef Role = 'admin' | 'user' | 'guest'
-// T: * User permission level
+// T: typedef Role = 'admin' | 'user' | 'guest' - User permission level
 
 // T: callback OnUserChange = (user: User, prev: User | null) => void
-// T: * Called when user data changes
+// T: # Called when user data changes
 ```
 
-> ⚠️ **Current behavior:** `typedef`/`callback` are [not yet implemented](#type-definitions). These standalone `// T:` lines bind to no JavaScript node, so the parser emits **no annotations** and the virtual document is **byte-for-byte identical to the source above** — `User`, `Role`, and `OnUserChange` do not resolve yet, and the imports of them in `user-service.js` below would be unresolved. The block below shows the *planned* projection once the feature lands.
+> ⚠️ **Current behavior:** `typedef` is [planned for Milestone 14](#type-definitions) and `callback` is deferred — neither is implemented yet. These standalone `// T:` lines bind to no JavaScript node, so the parser currently emits **no annotations** and the virtual document is **byte-for-byte identical to the source above** — `User`, `Role`, and `OnUserChange` do not resolve yet, and the imports of them in `user-service.js` below would be unresolved. The block below shows the *planned* Milestone 14 projection for the `typedef`s (and the deferred shape for the `callback`).
 
-**Planned virtual document for `src/models/user.js`** (once `typedef`/`callback` are implemented):
+**Planned virtual document for `src/models/user.js`** (`typedef` per Milestone 14; `callback` deferred):
 ```javascript
 /**
  * A registered user in the system
- * @typedef {Object} User
- * @property {string} id
- * @property {string} name
- * @property {string} email
- * @property {Role} role
+ * @typedef {{ id: string, name: string, email: string, role: Role }} User
  */
-const User = {};
+export const User = {};
 
 /**
  * User permission level
  * @typedef {'admin' | 'user' | 'guest'} Role
  */
-const Role = {};
+export const Role = {};
 
 /**
  * Called when user data changes
@@ -1914,7 +1905,7 @@ const subscribers = new Set();  // T: Set{OnUserChange}
 
 function createUser(name, email, role) {
 // T: (name: string, email: string, role?: Role) => User
-// T: * Creates a new user with the given details
+// T: # Creates a new user with the given details
 // T: @throws: Error - If email is invalid
     return {
         id: crypto.randomUUID(),
@@ -2040,8 +2031,8 @@ The following features are explicitly **not supported** in Ety v0.2:
 | Generic classes | ✅ |
 | Class inheritance | ✅ (with super() in stubs) |
 | Interface implementation | ✅ |
-| Typedef | ⏳ Planned (not yet implemented) |
-| Callback | ⏳ Planned (not yet implemented) |
+| Typedef | ⏳ Planned (Milestone 14 / Gate 12) |
+| Callback | ⏳ Planned (deferred — no milestone yet) |
 | Enum | ✅ (values retained) |
 | Type imports | ✅ (rewritten in stubs) |
 | Barrel exports | ✅ (export *, export {}) |
@@ -2083,6 +2074,7 @@ The following features are explicitly **not supported** in Ety v0.2:
 - Distributed as editor plugins: VS Code, JetBrains, and Neovim.
 - Inline `as` casts marked **deferred** (incompatible with the line-only/immutable-source invariants).
 - Documented that `typedef` and `callback` are **not yet implemented** — the parser binds annotations only to real AST nodes, and standalone `// T:` declarations are not emitted. Their sections now describe planned syntax.
+- **`typedef` planned design pinned to Milestone 14 / Gate 12.** The projection now uses an **inline object type** (`@typedef {{ … }} Name`, not `@typedef {Object}` + `@property`), so `readonly` and nesting carry through verbatim; descriptions reuse the existing ` - ` convention (not a `// T: #` continuation line); the synthetic `export const Name` binding is hoisted to module scope; and `typedef` is a reserved leading word alongside `ignore`/`i`. The invalid per-property `@readonly` form was corrected. `callback` remains deferred and follows the same node-less mechanism.
 
 ### v0.1.3
 
