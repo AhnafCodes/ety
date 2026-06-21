@@ -1,0 +1,6 @@
+{
+  "name": "typedef-string-literal-guard",
+  "description": "A // T: typedef inside a string literal is not a comment (trivia scan) -> zero annotations.",
+  "source": "const s = \"// T: typedef X = number\";\n",
+  "expected": []
+}

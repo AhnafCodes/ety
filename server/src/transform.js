@@ -323,8 +323,12 @@ export function transformDocument(source, annotations) {
     const ignoredLines = new Set(
         withLines.filter(a => a.kind === 'ignore').map(a => a.originalLine),
     );
-    const importAnnotations = withLines.filter(a => a.kind !== 'ignore' && a.ety.startsWith('import '));
-    const typeAnnotations   = withLines.filter(a => a.kind !== 'ignore' && !a.ety.startsWith('import '));
+    // `// T: typedef` is a standalone declaration, not a node-bound type — it
+    // is hoisted as its own synthetic block (below), so keep it out of the
+    // import and type streams (its body is not an `import ...` payload).
+    const importAnnotations  = withLines.filter(a => a.kind !== 'ignore' && a.kind !== 'typedef' && a.ety.startsWith('import '));
+    const typeAnnotations    = withLines.filter(a => a.kind !== 'ignore' && a.kind !== 'typedef' && !a.ety.startsWith('import '));
+    const typedefAnnotations = withLines.filter(a => a.kind === 'typedef').sort((a, b) => a.originalLine - b.originalLine);
 
     const virtualLines = [];
     const vToO = new Map();     // virtualLine -> originalLine
@@ -354,6 +358,29 @@ export function transformDocument(source, annotations) {
         // exists in place and gets its oToV entry during the flush below, so
         // oToV keeps pointing at the actual source line, not the hoisted copy.
         vLine++;
+    }
+
+    // Hoist typedefs to module scope (after imports, so a typedef can reference
+    // an imported base type). Each becomes an inline-object @typedef block plus
+    // a synthetic `export const Name = {}` — the export binding is REQUIRED for
+    // cross-file resolution (de-risk #1: a bare @typedef leaves the file "not a
+    // module"). Like imports, every synthetic line maps vToO -> the // T:
+    // typedef comment and sets no oToV (the real comment keeps its own oToV in
+    // the flush). Hoisting to the top means a typedef written inside a function
+    // body still emits a LEGAL top-level export.
+    const neutralize = s => s.replaceAll('*/', '* /'); // never terminate the block early
+    for (const td of typedefAnnotations) {
+        const block = ['/**'];
+        if (td.doc) block.push(` * ${neutralize(td.doc)}`);
+        block.push(` * @typedef {${neutralize(convertGenerics(td.ety))}} ${td.name}`);
+        block.push(' */');
+        block.push(`export const ${td.name} = {};`);
+        for (const text of block) {
+            virtualLines.push(text);
+            vToO.set(vLine, td.originalLine);
+            lineKind.set(vLine, { kind: 'typedef', commentRange: td.commentRange });
+            vLine++;
+        }
     }
 
     // Turn annotations into injection UNITS: { originalLine, lines:[{text,

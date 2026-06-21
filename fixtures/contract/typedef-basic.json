@@ -1,0 +1,16 @@
+{
+  "name": "typedef-basic",
+  "description": "Standalone typedef (object shape): kind typedef, binds to no node, own offsets, name/body split on first =.",
+  "source": "// T: typedef User = { id: string, name: string, age: number }\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 62,
+      "kind": "typedef",
+      "name": "User",
+      "ety": "{ id: string, name: string, age: number }",
+      "doc": ""
+    }
+  ]
+}
