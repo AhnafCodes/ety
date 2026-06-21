@@ -350,7 +350,7 @@ Ety (also `//T`) is a lightweight type annotation syntax using trailing comments
 
 **Key Principle:** No transpilation of JS code—only watching and generation of `//T` comments into JSDoc stubs.
 
-### Transpilation Pipeline XXXXX 
+### Transpilation Pipeline  ❌ ❌ ❌ ❌ ❌ <- this was the ety initial working/buggy way of achieving before pivotting to using LSP
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
