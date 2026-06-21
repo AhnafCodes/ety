@@ -346,18 +346,18 @@ let entries = [];               // T: [string, number][]
 
 ## Overview
 
-jty (also `//T`) is a lightweight type annotation syntax using trailing comments (inspired by [Python Type Comments](https://typing.python.org/en/latest/guides/modernizing.html#type-comments)) that generates JSDoc stub files. It provides a minimal type authoring format while generating type-only stub files in a shadow `.types/` directory for IDE intellisense.
+Ety (also `//T`) is a lightweight type annotation syntax using trailing comments (inspired by [Python Type Comments](https://typing.python.org/en/latest/guides/modernizing.html#type-comments)) that generates JSDoc stub files. It provides a minimal type authoring format while generating type-only stub files in a shadow `.types/` directory for IDE intellisense.
 
 **Key Principle:** No transpilation of JS code—only watching and generation of `//T` comments into JSDoc stubs.
 
-### Transpilation Pipeline
+### Transpilation Pipeline XXXXX 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         jty Transpilation Pipeline                      │
+│                         Ety Transpilation Pipeline                      │
 └─────────────────────────────────────────────────────────────────────────┘
 
-  SOURCE FILES                    jty TOOL                    STUB FILES
+  SOURCE FILES                    Ety TOOL                    STUB FILES
   ────────────                    ────────                    ──────────
 
   src/
@@ -383,7 +383,7 @@ jty (also `//T`) is a lightweight type annotation syntax using trailing comments
                                         │
                                         ▼
                                   ┌───────────┐
-                                  │ Generator │
+                                  │ Generator │    
                                   │ ───────── │
                                   │ • JSDoc   │
                                   │ • Stubs   │
