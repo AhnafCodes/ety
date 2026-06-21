@@ -7,7 +7,7 @@
 
 
 
-## Why //T or jty?
+## Why //T or Ety?
 
 //T or Ety  brings type safety to JavaScript with minimal syntax. Compare traditional JSDoc with Ety's `//T` comments:
 
