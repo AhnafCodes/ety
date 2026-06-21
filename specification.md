@@ -2,7 +2,7 @@
 
 # //T or EcmaScript Type Comments Specification(ety)
 
-**Version:** 0.2.0  
+**Version:** 0.2.1  
 **Status:** Draft
 
 
@@ -608,7 +608,7 @@ There is no watch mode, no file watcher, and no regeneration step — those belo
 
 ## Type Definitions
 
-> ⚠️ **Planned — Milestone 14 / Gate 12 (`typedef`); `callback` still deferred.** Standalone `// T:` declarations bind to no JavaScript AST node, so they need the parser's *node-less* extraction path — the same partition that already emits `import`, `=>` return, and `// T: ignore` annotations from the comment stream before node matching. `typedef` is the next arm of that path (Milestone 14); `callback` (its function-type cousin) follows the identical mechanism and stays deferred until its own milestone. The projections below are the **planned** Milestone 14 output, not present behavior — until it lands, declare shared shapes inline (object types on a variable) or in a real `.d.ts`/JSDoc file.
+> ✅ **`typedef` is implemented (Milestone 14 / Gate 12); `callback` is still deferred.** Standalone `// T:` declarations bind to no JavaScript AST node, so they use the parser's *node-less* extraction path — the same partition that emits `import`, `=>` return, and `// T: ignore` annotations from the comment stream before node matching. `typedef` is one more arm of that path; `callback` (its function-type cousin) follows the identical mechanism and stays deferred until its own milestone. The `typedef` projections below describe present behavior; the `callback` ones are illustrative planned syntax.
 >
 > **Reserved leading word.** After payload normalization, a `// T:` whose first word is `typedef` is a *declaration*, never a type — joining `ignore`/`i` (see [Directives](#directives)) in the reserved set. `callback` will join it when implemented.
 
@@ -1869,9 +1869,9 @@ The setting is read at `initialize` and kept live via `workspace/didChangeConfig
 // T: # Called when user data changes
 ```
 
-> ⚠️ **Current behavior:** `typedef` is [planned for Milestone 14](#type-definitions) and `callback` is deferred — neither is implemented yet. These standalone `// T:` lines bind to no JavaScript node, so the parser currently emits **no annotations** and the virtual document is **byte-for-byte identical to the source above** — `User`, `Role`, and `OnUserChange` do not resolve yet, and the imports of them in `user-service.js` below would be unresolved. The block below shows the *planned* Milestone 14 projection for the `typedef`s (and the deferred shape for the `callback`).
+> ⚠️ **Current behavior:** `typedef` is [implemented](#type-definitions); `callback` is still deferred. `User` and `Role` resolve and are importable from `user-service.js` below. The `// T: callback OnUserChange` line still binds to no node and emits no annotation yet, so `OnUserChange` does not resolve — its block below is the *illustrative* shape it will take when `callback` lands.
 
-**Planned virtual document for `src/models/user.js`** (`typedef` per Milestone 14; `callback` deferred):
+**Virtual document for `src/models/user.js`** (`typedef` shipped; the `callback` block is the deferred shape):
 ```javascript
 /**
  * A registered user in the system
@@ -2031,7 +2031,7 @@ The following features are explicitly **not supported** in Ety v0.2:
 | Generic classes | ✅ |
 | Class inheritance | ✅ (with super() in stubs) |
 | Interface implementation | ✅ |
-| Typedef | ⏳ Planned (Milestone 14 / Gate 12) |
+| Typedef | ✅ (inline-object `@typedef {{…}}` + hoisted `export const`) |
 | Callback | ⏳ Planned (deferred — no milestone yet) |
 | Enum | ✅ (values retained) |
 | Type imports | ✅ (rewritten in stubs) |
@@ -2064,6 +2064,10 @@ The following features are explicitly **not supported** in Ety v0.2:
 
 ## Changelog
 
+### v0.2.1
+
+- **Implemented `// T: typedef` (Milestone 14 / Gate 12).** Standalone type declarations now work: the parser emits a node-less `typedef` annotation (a fourth arm beside `import`/`=>`/`ignore`), and the transformer hoists an inline-object `@typedef {{…}} Name` block plus a synthetic `export const Name = {}` to module scope. The `export` binding is load-bearing — without it a bare `@typedef` leaves the file "not a module" and cross-file `// T: import` cannot resolve the type. Descriptions reuse the ` - ` convention. No capability or client change, so it ships to all three editors. `callback` remains deferred.
+
 ### v0.2.0
 
 - **Architecture pivot — LSP, not transpilation.** Ety is now a language server that builds an **in-memory virtual document** and hands it to the TypeScript Language Service, mapping results back to the real source. The prior stub-generation model was removed.
@@ -2073,7 +2077,7 @@ The following features are explicitly **not supported** in Ety v0.2:
 - **Configuration** is now LSP settings (`ety.*`), not `Ety.config.json`; the only setting is `ety.scriptHosts`.
 - Distributed as editor plugins: VS Code, JetBrains, and Neovim.
 - Inline `as` casts marked **deferred** (incompatible with the line-only/immutable-source invariants).
-- Documented that `typedef` and `callback` are **not yet implemented** — the parser binds annotations only to real AST nodes, and standalone `// T:` declarations are not emitted. Their sections now describe planned syntax.
+- Documented that `callback` is **not yet implemented** — the parser binds non-`typedef` annotations to real AST nodes, and the standalone `// T: callback` declaration is not emitted yet. Its section describes planned syntax.
 - **`typedef` planned design pinned to Milestone 14 / Gate 12.** The projection now uses an **inline object type** (`@typedef {{ … }} Name`, not `@typedef {Object}` + `@property`), so `readonly` and nesting carry through verbatim; descriptions reuse the existing ` - ` convention (not a `// T: #` continuation line); the synthetic `export const Name` binding is hoisted to module scope; and `typedef` is a reserved leading word alongside `ignore`/`i`. The invalid per-property `@readonly` form was corrected. `callback` remains deferred and follows the same node-less mechanism.
 
 ### v0.1.3

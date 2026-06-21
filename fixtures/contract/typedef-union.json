@@ -1,0 +1,16 @@
+{
+  "name": "typedef-union",
+  "description": "typedef of a primitive union; body preserved verbatim.",
+  "source": "// T: typedef ID = string | number\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 34,
+      "kind": "typedef",
+      "name": "ID",
+      "ety": "string | number",
+      "doc": ""
+    }
+  ]
+}

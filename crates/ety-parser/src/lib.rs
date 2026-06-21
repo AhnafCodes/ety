@@ -118,6 +118,20 @@ fn class_body_first_element(body: &ClassBody) -> u32 {
     body.body.first().map(|e| e.span().start).unwrap_or(body.span.end)
 }
 
+/// Split a typedef payload (`Name = Body`) into `(name, body)` on the first
+/// real `=` — one that is not the `=` of a `=>` arrow, so a function-type body
+/// keeps its arrow intact. No `=` (malformed `typedef Name`) yields
+/// `(name, "")`; a leading `=` (malformed `typedef = Body`) yields `("", body)`.
+fn split_typedef(rest: &str) -> (&str, &str) {
+    let bytes = rest.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'=' && bytes.get(i + 1) != Some(&b'>') {
+            return (rest[..i].trim(), rest[i + 1..].trim());
+        }
+    }
+    (rest.trim(), "")
+}
+
 struct EtyVisitor<'a> {
     source: &'a str,
     annotations: Vec<TComment<'a>>,
@@ -312,6 +326,14 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
     let (ignores, candidates): (Vec<_>, Vec<_>) =
         candidates.into_iter().partition(|(_, _, p)| *p == "ignore" || *p == "i");
 
+    // `// T: typedef Name = Body` is a standalone TYPE DECLARATION, not a type
+    // bound to a node. `typedef` is a reserved leading word (followed by a
+    // space), so it joins import/return/ignore in the node-less partition: it
+    // attaches to no AST node, and the transformer hoists a synthetic
+    // `@typedef`/`export const` block keyed on the comment's own line.
+    let (typedefs, candidates): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|(_, _, p)| p.starts_with("typedef "));
+
     let mut visitor =
         EtyVisitor { source, annotations: candidates, results: Vec::new(), fn_bodies: Vec::new() };
     visitor.visit_program(&ret.program);
@@ -357,6 +379,25 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
         name: String::new(),
         ety: p.to_string(),
         doc: String::new(),
+    }));
+    results.extend(typedefs.into_iter().map(|(s, e, p)| {
+        // p == "typedef <Name> = <Body>" (already normalized). Strip the
+        // reserved leading word, split Name = Body on the first real `=`, then
+        // reuse the `param` ` - ` convention to peel a trailing description.
+        let rest = p["typedef ".len()..].trim_start();
+        let (name, body) = split_typedef(rest);
+        let (ety, doc) = body
+            .split_once(" - ")
+            .map_or((body, ""), |(t, d)| (t.trim(), d.trim()));
+        EtyAnnotation {
+            node_start_offset: s,
+            ety_start_offset: s,
+            ety_end_offset: e,
+            kind: "typedef".to_string(),
+            name: name.to_string(),
+            ety: ety.to_string(),
+            doc: doc.to_string(),
+        }
     }));
     results.extend(visitor.results);
 
@@ -744,5 +785,60 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, "variable");
         assert_eq!(result[0].ety, "ignored");
+    }
+
+    // --- typedef declaration (`// T: typedef Name = Body`) ---
+
+    #[test]
+    fn split_typedef_first_real_equals_not_arrow() {
+        assert_eq!(split_typedef("User = { id: string }"), ("User", "{ id: string }"));
+        assert_eq!(split_typedef("Fn = (x: number) => string"), ("Fn", "(x: number) => string"));
+        assert_eq!(split_typedef("User"), ("User", "")); // malformed: no =
+        assert_eq!(split_typedef("= number"), ("", "number")); // malformed: no name
+    }
+
+    #[test]
+    fn typedef_is_standalone_and_binds_to_no_node() {
+        let source = "// T: typedef User = { id: string, name: string }\n";
+        let result = parse_source(source);
+        assert_eq!(result.len(), 1);
+        let a = &result[0];
+        assert_eq!(a.kind, "typedef");
+        assert_eq!(a.name, "User");
+        assert_eq!(a.ety, "{ id: string, name: string }");
+        assert_eq!(a.doc, "");
+        // node_start_offset is the comment's own start (like import/ignore).
+        let cs = source.find("//").unwrap() as u32;
+        assert_eq!(a.node_start_offset, cs);
+        assert_eq!(a.ety_start_offset, cs);
+    }
+
+    #[test]
+    fn typedef_peels_a_dash_description_into_doc() {
+        let source = "// T: typedef User = { id: string } - A registered user\n";
+        let a = &parse_source(source)[0];
+        assert_eq!(a.ety, "{ id: string }");
+        assert_eq!(a.doc, "A registered user");
+    }
+
+    #[test]
+    fn typedef_inside_a_function_body_still_binds_to_no_node() {
+        // Partitioned out BEFORE node matching, so it never attaches to `f`.
+        let source = "function f() {\n// T: typedef Local = { x: number }\n    return 1;\n}\n";
+        let result = parse_source(source);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].kind, "typedef");
+        assert_eq!(result[0].name, "Local");
+    }
+
+    #[test]
+    fn typedef_requires_a_trailing_space_after_the_keyword() {
+        // Reserved word is `typedef ` (with space); a bare `typedef` payload is
+        // a normal (erroring) type annotation, not a declaration.
+        let source = "let x = 1; // T: typedef\n";
+        let result = parse_source(source);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].kind, "variable");
+        assert_eq!(result[0].ety, "typedef");
     }
 }

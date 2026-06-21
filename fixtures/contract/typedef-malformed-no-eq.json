@@ -1,0 +1,16 @@
+{
+  "name": "typedef-malformed-no-eq",
+  "description": "Malformed typedef with no =: name captured, empty body (renders an erroring @typedef, never a crash).",
+  "source": "// T: typedef User\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 18,
+      "kind": "typedef",
+      "name": "User",
+      "ety": "",
+      "doc": ""
+    }
+  ]
+}

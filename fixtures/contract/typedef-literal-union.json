@@ -1,0 +1,16 @@
+{
+  "name": "typedef-literal-union",
+  "description": "typedef of a string-literal union; string contents untouched.",
+  "source": "// T: typedef Status = 'pending' | 'active' | 'closed'\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 54,
+      "kind": "typedef",
+      "name": "Status",
+      "ety": "'pending' | 'active' | 'closed'",
+      "doc": ""
+    }
+  ]
+}
