@@ -2,14 +2,14 @@
 
 # //T or EcmaScript Type Comments Specification(ety)
 
-**Version:** 0.1.2  
+**Version:** 0.2.0  
 **Status:** Draft
 
 
 
 ## Why //T or jty?
 
-//T or typ2  brings type safety to JavaScript with minimal syntax. Compare traditional JSDoc with jty's `//T` comments:
+//T or Ety  brings type safety to JavaScript with minimal syntax. Compare traditional JSDoc with Ety's `//T` comments:
 
 ### Simple Function
 
@@ -309,20 +309,20 @@ let entries = [];               // T: [string, number][]
 | Verbosity | High (multi-line blocks) | Low (single line) |
 | Generic syntax | `@template T` + `{T}` | `{T}(T) => T` |
 | Readability | Separated from code | Adjacent to code |
-| IDE support | Native | Via generated stubs |
+| IDE support | Native | Via language server (LSP) |
 | Learning curve | Moderate | Low (TypeScript-like) |
 
 ---
 
-### When to Use //T or jty
+### When to Use //T or Ety
 
-//T or jty is ideal when you:
+//T or Ety is ideal when you:
 
-| Scenario | jty Fit |
+| Scenario | Ety Fit |
 |----------|---------|
 | Find JSDoc too verbose | ✅ Excellent |
 | Need IDE intellisense for JS | ✅ Excellent |
-| Can run a generator/watcher | ✅ Required |
+| Can use an editor with the ety plugin | ✅ Required |
 | Cannot use TypeScript (organizational/legacy constraints) | ✅ Excellent |
 | Building npm packages with JS source + types | ✅ Excellent |
 | Migrating legacy JS codebase incrementally | ✅ Good |
@@ -346,50 +346,42 @@ let entries = [];               // T: [string, number][]
 
 ## Overview
 
-Ety (also `//T`) is a lightweight type annotation syntax using trailing comments (inspired by [Python Type Comments](https://typing.python.org/en/latest/guides/modernizing.html#type-comments)) that generates JSDoc stub files. It provides a minimal type authoring format while generating type-only stub files in a shadow `.types/` directory for IDE intellisense.
+Ety (also `//T`) is a lightweight type annotation syntax using trailing comments (inspired by [Python Type Comments](https://typing.python.org/en/latest/guides/modernizing.html#type-comments)). It brings TypeScript-grade diagnostics and hovers to plain JavaScript with no build step, no `.ts` files, and no generated artifacts on disk.
 
-**Key Principle:** No transpilation of JS code—only watching and generation of `//T` comments into JSDoc stubs.
+**Key Principle:** Ety is a **language server**, not a transpiler or code generator. It never rewrites your source and never writes files. Your `.js`/`.jsx` stays byte-for-byte unchanged and runs anywhere; the types live only in `// T:` comments and in an **in-memory virtual document** that the server hands to the TypeScript Language Service.
 
-### Transpilation Pipeline  ❌ ❌ ❌ ❌ ❌ <- this was the ety initial working/buggy way of achieving before pivotting to using LSP
+### Architecture (LSP + Virtual Document)
+
+Ety builds a *virtual document* by inserting JSDoc lines above your annotations, hands that to the TypeScript Language Service, and maps the results back to your real source. Nothing is written to disk.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Ety Transpilation Pipeline                      │
-└─────────────────────────────────────────────────────────────────────────┘
-
-  SOURCE FILES                    Ety TOOL                    STUB FILES
-  ────────────                    ────────                    ──────────
-
-  src/
-  ├── models/
-  │   └── user.js ─────────┐
-  │       // T: typedef... │
-  │                        │     ┌─────────────┐
-  ├── services/            ├────►│             │
-  │   └── auth.js ─────────┤     │  jty        │         .types/
-  │       // T: (string)   │     │  generate   │         └── src/
-  │                        │     │             │             ├── models/
-  └── index.js ────────────┘     └──────┬──────┘             │   └── user-ty.jsdoc.js
-      // T: ...                         │                    │       /** @typedef ... */
-                                        │                    │       export const User = {};
-                                        ▼                    │
-                                  ┌───────────┐              ├── services/
-                                  │  Parser   │              │   └── auth-ty.jsdoc.js
-                                  │  ───────  │              │       /** @param {string} */
-                                  │  Extract  │              │       export function...
-                                  │  // T:    │              │
-                                  │  comments │              └── index-ty.jsdoc.js
-                                  └─────┬─────┘
-                                        │
-                                        ▼
-                                  ┌───────────┐
-                                  │ Generator │    
-                                  │ ───────── │
-                                  │ • JSDoc   │
-                                  │ • Stubs   │
-                                  │ • Imports │
-                                  └───────────┘
+.js source ──► Rust parser (Oxc) ──► annotations ──► transformer ──► virtual doc
+   ▲                                                                      │
+   │                                                                      ▼
+   └────── LSP diagnostics / hover ◄──── line maps ◄──── TypeScript Language Service
 ```
+
+Three invariants keep the mapping trivial and robust:
+
+- **Immutable source** — the user's bytes are never edited.
+- **Additive overlay** — insertions are always *whole lines* (injected JSDoc, hoisted imports), so character columns on code lines are identical between the real and virtual documents.
+- **Line-only mapping** — because columns never shift, the entire source map is two line-number maps (`vToO` / `oToV`). No intra-line offset tracking.
+
+A type error inside an injected JSDoc line is remapped onto the `// T:` comment you can actually edit, so the squiggle always lands on real, editable text.
+
+#### Pipeline stages
+
+| Stage | Component | Role |
+|-------|-----------|------|
+| Parse | Rust (Oxc) napi addon — `crates/ety-parser` | Parses the `.js` AST and extracts `// T:` annotations with their positions. |
+| Transform | `server/src/transform.js` (pure, no I/O) | Builds the virtual document (injected JSDoc + hoisted imports) and the line maps. Hosts the `{}`-generic scanners. |
+| Type-check | `server/src/tsHost.js` | TypeScript Language Service host; serves the virtual documents and produces diagnostics/hover. |
+| Serve | `server/src/handlers.js` | Diagnostics, hover, and inference-driven completion as pure `(state, deps)` functions; remap TypeScript results back through the line maps onto the original source. |
+| Wire | `server/src/main.js` | Connection plumbing only. |
+
+The server is launched by the editor plugin (VS Code, JetBrains, Neovim) over LSP — there is no standalone CLI, generator, or watcher.
+
+> **Historical note:** Earlier drafts (≤ v0.1.3) described a *transpilation pipeline* that **generated** JSDoc stub files (`-ty.jsdoc.js`) into a shadow `.types/` directory, which the IDE then consumed through `jsconfig.json` path mapping, all driven by a `Ety generate --watch` CLI. That approach was an early, buggy prototype and has been **removed**. Ety now serves types directly over LSP from an in-memory virtual document: no stub files, no `.types/` directory, and no generator/watcher CLI exist. The "Generates" examples throughout this document describe the JSDoc that ety projects **into the virtual document**, not files it writes.
 
 ---
 
@@ -405,7 +397,7 @@ let count = 0;  // T: number
 
 ### Generic Syntax
 
-jty uses curly braces `{T}` for generics instead of angle brackets `<T>`:
+Ety uses curly braces `{T}` for generics instead of angle brackets `<T>`:
 
 ```javascript
 let items = [];       // T: Array{string}
@@ -417,7 +409,7 @@ function identity(x) {
 }
 ```
 
-> **Rationale:** Curly braces avoid conflicts with HTML/JSX contexts and provide a distinct jty identity while remaining visually clean.
+> **Rationale:** Curly braces avoid conflicts with HTML/JSX contexts and provide a distinct Ety identity while remaining visually clean.
 
 ---
 
@@ -535,7 +527,7 @@ type_args      ::= type_expr ("," type_expr)*
 
 ### Error Message Format
 
-When jty encounters an error, messages must trace back to the original source:
+When Ety encounters an error, messages must trace back to the original source:
 
 ```
 Error: Invalid type syntax
@@ -556,36 +548,28 @@ Error: Invalid type syntax
 | Ambiguous Generic | `// T: {T}` | `Ambiguous generic. Use '{T}(...)' for function or '{ T: type }' for object` |
 | Invalid Position | `let x = 1; // T: string // T: number` | `Multiple type annotations on same line` |
 
-### Source Maps
+### Source Maps (line-only)
 
-Generated stub files should include source map comments for IDE navigation:
+Because every insertion ety makes is a *whole line* (injected JSDoc, hoisted imports), columns on code lines never shift between the real and virtual documents. The entire source map is therefore two line-number maps held in memory:
 
-```javascript
-// .types/src/auth-ty.jsdoc.js
+- **`vToO`** — virtual line → original line
+- **`oToV`** — original line → virtual line
 
-/**
- * @param {string} name
- * @param {string} email
- * @returns {User}
- */
-export function createUser(name, email) {}
-//# sourceURL=../../src/auth.js
-//# sourceLine=15
-```
+There are no source-map comments, no `mapping.json`, and no generated files. When TypeScript reports a diagnostic at a virtual line, ety looks it up in `vToO` to find the original line. A diagnostic that lands on an *injected* JSDoc line (which has no original counterpart) is remapped onto the nearest `// T:` comment the user can actually edit, so the squiggle always lands on real, editable text.
 
 ### IDE Integration
 
-When an IDE reports a type error in a stub file, the error should be mappable to the original `// T:` comment:
+When the TypeScript Language Service reports a type error against the virtual document, ety remaps it back onto the original source before publishing the diagnostic over LSP:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         Error Tracing Flow                               │
 └─────────────────────────────────────────────────────────────────────────┘
 
-  IDE Error (in stub)              Source Map              Original Source
-  ──────────────────              ──────────              ───────────────
+  TS error (virtual doc)          vToO line map           Original Source
+  ──────────────────────          ─────────────           ───────────────
 
-  .types/src/auth-ty.jsdoc.js     mapping.json            src/auth.js
+  virtual auth.js                 vToO[12] = 15            src/auth.js
   Line 12: Type 'Uzer'    ───────────────────────►        Line 15:
   is not assignable...                                    // T: (string) => Uzer
                                                                            ^^^^
@@ -593,89 +577,38 @@ When an IDE reports a type error in a stub file, the error should be mappable to
 
 ---
 
-## Watch Mode Reliability
+## Live Updates (LSP)
 
-### Requirements
+There is no watch mode, no file watcher, and no regeneration step — those belonged to the removed stub-generation prototype. Because ety is a language server, the editor drives updates through the LSP document lifecycle:
 
-Watch mode (`jty generate --watch`) must guarantee:
-
-1. **File Change Detection** — Any `.js` file modification triggers regeneration
-2. **Atomic Writes** — Stub files are written atomically (write to temp, then rename)
-3. **Debouncing** — Rapid successive saves are debounced (default: 100ms)
-4. **Error Recovery** — Parse errors don't crash the watcher
-5. **Dependency Tracking** — Changes to imported types trigger dependent file regeneration
-
-### Watch Mode Behavior
+1. **Change detection** — The editor sends `textDocument/didChange` on every keystroke (incremental sync). Ety re-parses and re-projects the affected document in memory; nothing is written to disk.
+2. **Debouncing** — Diagnostics are debounced server-side (`DEBOUNCE_MS`, default 200ms in `handlers.js`) so rapid typing coalesces into a single type-check pass.
+3. **Error recovery** — A parse or handler error degrades a single request, not the process. `vscode-languageserver` catches handler exceptions and answers a JSON-RPC error, so one bad annotation never crashes the server (a crash loop would brick the editor, since the client only restarts the server a limited number of times).
+4. **Open-document scope** — Ety analyzes the documents the editor has open. Imported types resolve only when the file declaring them is also open (v1 limitation; closed files are read raw from disk without their annotations).
+5. **Live configuration** — `ety.scriptHosts` changes arrive via `workspace/didChangeConfiguration`; the server re-reads the setting and re-projects every open document so a newly-enabled host takes effect without a restart.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         Watch Mode Flow                                 │
+│                         Live Update Flow                                │
 └─────────────────────────────────────────────────────────────────────────┘
 
-  File System Event                 jty Watcher                Action
-  ─────────────────                ───────────                ──────
+  LSP event                         ety server                 Action
+  ─────────                        ──────────                 ──────
 
-  src/models/user.js
-  (modified)          ──────►      Debounce (100ms)  ──────►  Regenerate:
-                                                              • user-ty.jsdoc.js
-                                                              • auth-ty.jsdoc.js (imports User)
-                                                              • index-ty.jsdoc.js (re-exports)
+  didChange (user.js)  ──────►   re-parse + re-project ──►   publishDiagnostics
+                                 (debounce 200ms)            for user.js (in memory)
 
-  src/new-file.js
-  (created)           ──────►      Detect new file   ──────►  Generate:
-                                                              • new-file-ty.jsdoc.js
-                                                              
-  src/old-file.js
-  (deleted)           ──────►      Detect deletion   ──────►  Remove:
-                                                              • old-file-ty.jsdoc.js
-```
+  didOpen (new.js)     ──────►   parse + project       ──►   publishDiagnostics
 
-### CLI Output (Watch Mode)
-
-```bash
-$ jty generate src/ --watch
-
-[jty] Watching src/ for changes...
-[jty] Generated 12 stub files
-
-[14:32:01] src/models/user.js changed
-[14:32:01] ✓ .types/src/models/user-ty.jsdoc.js (2ms)
-[14:32:01] ✓ .types/src/services/auth-ty.jsdoc.js (1ms, dependency)
-
-[14:32:15] src/utils/helpers.js changed
-[14:32:15] ✗ Parse error at line 23: Unclosed parenthesis
-           |
-        23 |     // T: (string, number
-           |         ^^^^^^^^^^^^^^^^^
-
-[14:32:30] src/utils/helpers.js changed
-[14:32:30] ✓ .types/src/utils/helpers-ty.jsdoc.js (1ms)
-```
-
-### Configuration
-
-**jty.config.json** (optional):
-```json
-{
-  "watch": {
-    "debounce": 100,
-    "ignored": ["**/*.test.js", "**/*.spec.js"],
-    "persistent": true
-  },
-  "output": {
-    "dir": ".types",
-    "ext": "-ty.jsdoc.js"
-  },
-  "parser": {
-    "strict": true,
-    "unknownTypeError": "warn"
-  }
-}
+  didClose (old.js)    ──────►   drop virtual doc      ──►   clear diagnostics
+                                 + line maps
 ```
 
 ---
 
 ## Type Definitions
+
+> ⚠️ **Not yet implemented (planned syntax).** `typedef` and `callback` are **not supported** by the current LSP implementation. The parser only attaches `// T:` annotations to real JavaScript AST nodes (functions, variables, properties, classes), and `typedef`/`callback` are written as *standalone* `// T:` lines bound to no node — so the parser never emits them and the transformer has no code path for them. The examples below (including the synthetic `const Name = {};` binding) describe the **removed stub-generator** prototype and document the *intended* future syntax, not present behavior. Until implemented, declare shared shapes inline (e.g. object types on a variable) or in a real `.d.ts`/JSDoc file.
 
 ### Typedef
 
@@ -685,7 +618,7 @@ $ jty generate src/ --watch
 // T: typedef Status = 'pending' | 'active' | 'closed'
 ```
 
-**Generates (with dummy export):**
+**Projects to (virtual document, with synthetic binding):**
 ```javascript
 /**
  * @typedef {Object} User
@@ -748,7 +681,7 @@ export const User = {};
 // T: callback Mapper = {T, U}(item: T, index: number) => U
 ```
 
-**Generates (with dummy export):**
+**Projects to (virtual document, with synthetic binding):**
 ```javascript
 /**
  * @callback OnSuccess
@@ -806,7 +739,7 @@ function save(user) {
 // T: import { Config, Options } from 'src/config'
 ```
 
-> **Important:** Use baseUrl-relative imports (e.g., `'src/models'`) rather than relative paths (e.g., `'./models'`). See [IDE Configuration](#ide-configuration) for details.
+> **Note:** Import specifiers are resolved against the real module graph, so relative paths (e.g., `'./models'`) work normally — no baseUrl/`paths` configuration is required. The imported file must be **open** in the editor for its `// T:` annotations to resolve (v1 limitation).
 NOTE: class and function/method typing(// T: ) is  below not above defination to avoid collision.
 ---
 
@@ -830,7 +763,7 @@ let lookup = {};                  // T: Record{string, number}
 let count = 0;  // T: number - Current item count
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * Current item count
@@ -888,7 +821,7 @@ function add(a, b) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * Adds two numbers together
@@ -910,7 +843,7 @@ function add(
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {number} a - First operand
@@ -927,7 +860,7 @@ const add = (a, b) => a + b;  // T: (number, number) => number
 const greet = (name) => `Hello ${name}`;  // T: (string) => string
 ```
 
-**Generates (stub) — preserves const declaration:**
+**Projects to (virtual document) — preserves const declaration:**
 ```javascript
 /**
  * @param {number} a
@@ -952,7 +885,7 @@ export default function calculate(x) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {number} x
@@ -967,7 +900,7 @@ const handler = (req, res) => { ... };  // T: (Request, Response) => void
 export default handler;
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {Request} req
@@ -987,7 +920,7 @@ function sum(...nums) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {...number} nums
@@ -1007,7 +940,7 @@ function greet(name, times) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {string} name
@@ -1026,7 +959,7 @@ function greet(name, times = 1) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {string} name
@@ -1046,7 +979,7 @@ function process({ name, age }) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {Object} param0
@@ -1064,7 +997,7 @@ function process({ name, age = 18 }) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {Object} param0
@@ -1085,7 +1018,7 @@ async function fetchUser(id) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @param {number} id
@@ -1113,7 +1046,7 @@ function identity(x) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @template T
@@ -1131,7 +1064,7 @@ function pair(a, b) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @template T
@@ -1156,7 +1089,7 @@ function getProperty(obj, key) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @template {{ length: number }} T
@@ -1184,7 +1117,7 @@ function createArray(length, value) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @template [T=string]
@@ -1205,7 +1138,7 @@ function onClick(event) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @this {HTMLElement}
@@ -1245,7 +1178,7 @@ class User {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * Represents a system user
@@ -1305,7 +1238,7 @@ class Admin extends User {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * Administrator with elevated permissions
@@ -1357,7 +1290,7 @@ class Box {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * A generic container class
@@ -1396,7 +1329,7 @@ class Resource {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @implements {Disposable}
@@ -1418,7 +1351,7 @@ class Config {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 export class Config {
     /**
@@ -1448,7 +1381,7 @@ const Roles = {
 };  // T: enum number - User permission levels
 ```
 
-**Generates (stub with values retained):**
+**Projects to (virtual document, values retained):**
 ```javascript
 /**
  * User permission levels
@@ -1469,7 +1402,7 @@ const Status = {
 };  // T: enum string
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * @enum {string}
@@ -1489,38 +1422,33 @@ export const Status = {
 
 ### Variable Declaration (Recommended)
 
-For declaring a variable with a specific type:
+For declaring a variable with a specific type, annotate the binding. The type narrows the declared variable, which is the recommended way to assert a cast:
 
 ```javascript
 const input = document.getElementById('name');  // T: HTMLInputElement
 ```
 
-**Generates (stub):**
+**Virtual document (JSDoc injected):**
 ```javascript
 /** @type {HTMLInputElement} */
-export let input;
+const input = document.getElementById('name');
 ```
 
-### Inline Cast
+### Inline Cast (deferred)
 
-For inline type assertions, use the `as` keyword. This generates an inline JSDoc cast in the source file (not the stub):
+A future inline-assertion form using the `as` keyword is planned:
 
 ```javascript
 const input = document.getElementById('name');  // T: as HTMLInputElement
 ```
 
-**Generates (in source, via inject mode):**
-```javascript
-const input = /** @type {HTMLInputElement} */ (document.getElementById('name'));
-```
-
-> **Note:** Inline casts are only generated when using `jty inject` mode, not stub generation.
+> **Deferred.** True inline casts (`/** @type {HTMLInputElement} */ (expr)`) require rewriting *inside* a line, which breaks ety's line-only/immutable-source invariants. They are **not implemented** — use the variable-declaration form above. If an autofix that edits the real file is ever added, it would be an explicit, opt-in code action, not part of the live virtual-document overlay.
 
 ---
 
 ## Barrel Exports (Re-exports)
 
-Barrel files (`index.js`) that re-export from other modules are fully supported.
+Barrel files (`index.js`) that re-export from other modules are fully supported. Re-export statements are left **verbatim** in the virtual document and resolved against the real module graph — there is no specifier rewriting.
 
 ### Export All
 
@@ -1529,10 +1457,10 @@ export * from './user';
 export * from './auth';
 ```
 
-**Generates (stub):**
+**Virtual document (unchanged):**
 ```javascript
-export * from './user-ty.jsdoc.js';
-export * from './auth-ty.jsdoc.js';
+export * from './user';
+export * from './auth';
 ```
 
 ### Named Re-exports
@@ -1542,10 +1470,10 @@ export { User, createUser } from './user';
 export { authenticate as auth } from './auth';
 ```
 
-**Generates (stub):**
+**Virtual document (unchanged):**
 ```javascript
-export { User, createUser } from './user-ty.jsdoc.js';
-export { authenticate as auth } from './auth-ty.jsdoc.js';
+export { User, createUser } from './user';
+export { authenticate as auth } from './auth';
 ```
 
 ### Mixed Barrel
@@ -1558,19 +1486,19 @@ export { Auth } from './auth';
 export const VERSION = '1.0.0';  // T: string
 ```
 
-**Generates (stub):**
+**Virtual document (JSDoc injected; re-exports untouched):**
 ```javascript
 /**
  * @typedef {Object} PublicAPI
  * @property {string} version
  */
-export const PublicAPI = {};
+const PublicAPI = {};
 
-export * from './user-ty.jsdoc.js';
-export { Auth } from './auth-ty.jsdoc.js';
+export * from './user';
+export { Auth } from './auth';
 
 /** @type {string} */
-export let VERSION;
+export const VERSION = '1.0.0';
 ```
 
 ---
@@ -1591,7 +1519,7 @@ let b = bar();
 
 ## Embedded Host Documents (`<script>` tags)
 
-`// T:` annotations are not limited to `.js`/`.jsx` source — jty also processes the
+`// T:` annotations are not limited to `.js`/`.jsx` source — Ety also processes the
 JavaScript inside `<script>` blocks of **host documents**. `.html` is supported by
 default; the server-side template formats `.jsp`, `.aspx`, `.tpl`, and `.ftl` are
 **opt-in** (the static parts of their `<script>` bodies are JavaScript, but they also
@@ -1628,7 +1556,7 @@ setting rather than on by default).
 - **HTML5 raw-text rule:** a script body ends at the first `</script`, even when it
   appears inside a JavaScript string — `const s = "</script>"` closes the element.
 
-**Position fidelity (line- and column-parallel).** jty analyzes a projection of the
+**Position fidelity (line- and column-parallel).** Ety analyzes a projection of the
 host that keeps every `<script>` line byte-for-byte (indentation included) and blanks
 everything outside script bodies. Because line *and* column are preserved, diagnostics
 and hovers map onto the **original host file** unchanged — a type error squiggles its
@@ -1662,7 +1590,7 @@ function calculate(x) {
 }
 ```
 
-**Generates (stub):**
+**Projects to (virtual document):**
 ```javascript
 /**
  * Calculates using complex formula
@@ -1820,294 +1748,115 @@ NOTE: * Vs -  // T * Heading vs // T: number - Current count "-" is inline comme
 
 ---
 
-## Output Strategy: Shadow Types Directory
+## Output Strategy: In-Memory Virtual Document
 
-### The Shadow Directory Concept
-
-The `.types/` directory mirrors your source tree exactly, creating a "shadow" of your codebase containing only type information.
+Ety produces no files. For each open source document it constructs a **virtual document** in memory: a copy of your source with JSDoc lines inserted *above* each annotated node (and `// T: import` lines hoisted to the top). That virtual document — never your real file — is what the TypeScript Language Service type-checks.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                      Shadow Directory Structure                         │
+│                      Virtual Document (in memory)                       │
 └─────────────────────────────────────────────────────────────────────────┘
 
-     SOURCE TREE                              SHADOW TREE
-     ───────────                              ───────────
-     (Your Code)                              (Generated Types)
+   REAL SOURCE (on disk, untouched)        VIRTUAL DOCUMENT (in memory only)
+   ─────────────────────────────────       ─────────────────────────────────
 
-     project/                                 project/
-     │                                        │
-     ├── src/                                 ├── .types/
-     │   │                                    │   │
-     │   ├── models/                          │   └── src/
-     │   │   ├── user.js ─────────────────────────► models/
-     │   │   │   // T: typedef User = {...}   │       └── user-ty.jsdoc.js
-     │   │   │                                │           /** @typedef {Object} User */
-     │   │   └── post.js ─────────────────────────►       export const User = {};
-     │   │       // T: typedef Post = {...}   │
-     │   │                                    │       └── post-ty.jsdoc.js
-     │   ├── services/                        │
-     │   │   └── auth.js ─────────────────────────► services/
-     │   │       // T: (string) => User       │       └── auth-ty.jsdoc.js
-     │   │                                    │           /** @param {string} */
-     │   └── index.js ────────────────────────────►       export function login() {}
-     │       export * from './models'         │
-     │                                        │   └── index-ty.jsdoc.js
-     │                                        │       export * from './models-ty.jsdoc.js'
-     ├── jsconfig.json                        │
-     └── package.json                         └── (paths mapping points here)
+   src/models/user.js                       (virtual) src/models/user.js
+   // T: typedef User = {...}        ──►     /** @typedef {Object} User */
+                                             ... User declarations ...
 
-     Key Points:
-     ───────────
-     • Every .js file gets a corresponding -ty.jsdoc.js stub
-     • Directory structure is exactly mirrored
-     • Imports are rewritten to point to stub siblings
-     • Source files remain untouched (no JSDoc clutter)
+   src/services/auth.js                      (virtual) src/services/auth.js
+   function login(name) {            ──►     /** @param {string} name */
+   // T: (string) => User                    function login(name) {
+
+   Key Points:
+   ───────────
+   • No -ty.jsdoc.js stubs, no .types/ directory — nothing is written.
+   • Inserted lines are whole lines, so code columns never shift.
+   • A vToO / oToV line map ties each virtual line to its real line.
+   • Imports are resolved against the real module graph, not rewritten.
 ```
 
-### Directory Structure
+### Virtual Document Projection Rules
 
-Generated stub files are placed in a `.types/` directory at project root, mirroring the source tree exactly.
+Each source construct projects to JSDoc + a declaration in the virtual document (the source itself is never modified):
 
-```
-project/
-├── src/
-│   ├── lib/
-│   │   └── math.js
-│   ├── models/
-│   │   └── user.js
-│   └── index.js
-├── .types/
-│   └── src/
-│       ├── lib/
-│       │   └── math-ty.jsdoc.js
-│       ├── models/
-│       │   └── user-ty.jsdoc.js
-│       └── index-ty.jsdoc.js
-├── jsconfig.json
-└── package.json
-```
+| Source Construct | Virtual-Document Projection |
+|------------------|-----------------------------|
+| `function name(params) { ... }` | JSDoc block + `function name(params) { ... }` |
+| `export default function name(params) { ... }` | JSDoc block + `export default function name(...)` |
+| `const fn = (params) => ...` | JSDoc block above the `const` declaration |
+| `let fn = (params) => ...` | JSDoc block above the `let` declaration |
+| `class Name { ... }` | JSDoc block per class/method/property |
+| `class Child extends Parent { ... }` | JSDoc block; `super()` semantics preserved from the real source |
+| `const x = value` / `let x = value` | `/** @type {…} */` above the declaration |
+| `// T: typedef Name = ...` | JSDoc `@typedef` + a synthetic `const Name` binding |
+| `// T: callback Name = ...` | JSDoc `@callback` + a synthetic `const Name` binding |
+| `const ENUM = { ... }` (with `// T: enum`) | `/** @enum {…} */` above the object (values retained) |
+| `export * from './path'` | left as-is; resolved against the real module graph |
+| `export { A, B } from './path'` | left as-is; resolved against the real module graph |
 
-### Stub Generation Rules
-
-| Source Construct | Stub Output |
-|------------------|-------------|
-| `function name(params) { ... }` | `export function name(params) {}` |
-| `export default function name(params) { ... }` | `export default function name(params) {}` |
-| `const fn = (params) => ...` | `export const fn = (params) => {};` |
-| `let fn = (params) => ...` | `export let fn = (params) => {};` |
-| `class Name { ... }` | `export class Name { /* empty methods */ }` |
-| `class Child extends Parent { ... }` | `export class Child extends Parent { constructor() { super(); } }` |
-| `const x = value` | `export let x;` |
-| `let x = value` | `export let x;` |
-| `// T: typedef Name = ...` | JSDoc `@typedef` + `export const Name = {};` |
-| `// T: callback Name = ...` | JSDoc `@callback` + `export const Name = {};` |
-| `const ENUM = { ... }` (with `// T: enum`) | `export const ENUM = { ... };` (values retained) |
-| `export * from './path'` | `export * from './path-ty.jsdoc.js';` |
-| `export { A, B } from './path'` | `export { A, B } from './path-ty.jsdoc.js';` |
+> Synthetic parameter names are supplied where a positional signature omits them — `(number) => number` projects as `(p0: number) => number`. You never see this; it lives only in the virtual document.
 
 ### Generic Syntax Transformation
 
-jty uses `{T}` syntax which transforms to JSDoc's `<T>` in generated stubs:
+Ety uses `{T}` syntax, which the transformer rewrites to JSDoc's `<T>` in the virtual document:
 
-| jty Syntax | Generated JSDoc |
-|------------|-----------------|
+| Ety Syntax | Virtual-Document JSDoc |
+|------------|------------------------|
 | `Map{string, number}` | `Map<string, number>` |
 | `Set{User}` | `Set<User>` |
 | `Promise{T}` | `Promise<T>` |
 | `{T}(T) => T` | `@template T` + `@param {T}` + `@returns {T}` |
 | `{T extends string}` | `@template {string} T` |
 
-### Import Rewriting
+### Imports
 
-Imports within generated stubs are rewritten to reference sibling stub files.
+`// T: import` annotations are hoisted to the top of the virtual document and resolved against the **real module graph** — there is no stub-sibling rewriting, no `.types/` path, and no `jsconfig.json` `paths` mapping. Plain JavaScript `import`/`export` statements are left exactly as written.
 
-**Source:** `src/auth.js`
 ```javascript
-import { User } from 'src/models/user';
+// T: import { User, Role } from './types'
 ```
 
-**Generated:** `.types/src/auth-ty.jsdoc.js`
-```javascript
-import { User } from 'src/models/user-ty.jsdoc.js';
-```
+Because resolution follows the real files, relative imports work normally; you do **not** need baseUrl-relative specifiers.
 
-### IDE Configuration
+> **v1 limitation — imported files must be open.** Types from another module resolve only when that file is also open in the editor. Closed files are read raw from disk *without* their `// T:` annotations, so a hover on an imported symbol may come up empty until you open the file that declares it. (v2 plans *transform-on-read* to lift this.)
 
-#### Node.js / Bun
-
-**jsconfig.json:**
-```json
-{
-  "compilerOptions": {
-    "baseUrl": "./",
-    "paths": {
-      "src/*": [".types/src/*", "src/*"]
-    },
-    "checkJs": true
-  },
-  "include": ["src/**/*", ".types/**/*"],
-  "exclude": ["node_modules"]
-}
-```
-
-#### Deno
-
-Deno uses `deno.json` with import maps instead of `jsconfig.json` paths.
-
-**deno.json:**
-```json
-{
-  "compilerOptions": {
-    "checkJs": true
-  },
-  "imports": {
-    "src/": "./.types/src/"
-  }
-}
-```
-
-> **Note:** Deno requires explicit file extensions in imports. Use `import { User } from 'src/models/user.js'` in source files, and jty will generate stubs with `-ty.jsdoc.js` extension.
-
-> **URL Imports:** External URL imports (e.g., `https://deno.land/...`) pass through unchanged. Use `// T: ignore` if needed:
-> ```javascript
-> import { serve } from "https://deno.land/std/http/server.ts";  // T: ignore
-> ```
-
-### Import Resolution Flow
-
-Understanding why baseUrl imports are required:
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        Import Resolution Flow                           │
-└─────────────────────────────────────────────────────────────────────────┘
-
-  SCENARIO A: Relative Import (❌ No Types)
-  ─────────────────────────────────────────
-
-  // In src/services/auth.js
-  import { User } from './models/user';
-                         │
-                         ▼
-  ┌─────────────────────────────────────┐
-  │  IDE Resolution Steps:              │
-  │  1. Sees relative path './'         │
-  │  2. Resolves from current dir       │
-  │  3. Finds: src/models/user.js       │◄──── Source file (no JSDoc)
-  │  4. paths mapping IGNORED           │
-  └─────────────────────────────────────┘
-                         │
-                         ▼
-                    ❌ No Intellisense
-
-
-  SCENARIO B: BaseUrl Import (✅ Full Types)
-  ──────────────────────────────────────────
-
-  // In src/services/auth.js
-  import { User } from 'src/models/user';
-                         │
-                         ▼
-  ┌─────────────────────────────────────┐
-  │  IDE Resolution Steps:              │
-  │  1. Sees non-relative path          │
-  │  2. Checks jsconfig.json paths      │
-  │  3. Tries: .types/src/models/user   │
-  │  4. Finds: -ty.jsdoc.js             │◄──── Stub file (full JSDoc)
-  └─────────────────────────────────────┘
-                         │
-                         ▼
-                    ✅ Full Intellisense
-
-
-  jsconfig.json Configuration:
-  ────────────────────────────
-  {
-    "compilerOptions": {
-      "baseUrl": "./",
-      "paths": {
-        "src/*": [".types/src/*", "src/*"]
-                  ▲              ▲
-                  │              └── Fallback: source file
-                  └── First try: stub file
-      }
-    }
-  }
-```
-
-> **Critical Usage Note:**
-> 
-> To ensure the IDE resolves types from the generated stubs instead of the untyped source files, **always use baseUrl-relative imports** rather than relative paths.
-> 
-> | Import Style | Resolution | Intellisense |
-> |--------------|------------|--------------|
-> | `import { add } from './lib/math'` | Resolves to `./lib/math.js` (source) | ❌ No types |
-> | `import { add } from 'src/lib/math'` | Resolves to `.types/src/lib/math-ty.jsdoc.js` via paths | ✅ Full types |
-> 
-> The `paths` mapping in `jsconfig.json` only takes effect for non-relative module specifiers. Relative imports (`./`, `../`) bypass the mapping entirely and resolve directly to the source file.
-
-### .gitignore / .dockerignore
-
-```gitignore
-.types/
-```
+> **No project configuration needed.** There is no `jsconfig.json`/`deno.json` `paths` setup and nothing to add to `.gitignore` — ety writes nothing, so there is nothing to ignore.
 
 ---
 
-## CLI
+## Running ety
 
-```bash
-jty generate src/              # Generate stubs to .types/
-jty generate src/ --watch      # Watch mode
+Ety has **no standalone CLI** — there is nothing to `generate`, `clean`, `inject`, or `watch`, because nothing is written to disk. Ety is a language server launched by an editor plugin over LSP. Installing the plugin for your editor is all that is required:
 
-jty init                       # Create config (auto-detect runtime)
-jty init --runtime node        # Node.js/Bun config (jsconfig.json)
-jty init --runtime deno        # Deno config (deno.json)
+| Editor | Distribution |
+|--------|--------------|
+| VS Code | `client/ety-client-0.0.1.vsix` — *Extensions: Install from VSIX…* |
+| JetBrains (IntelliJ, WebStorm, PyCharm) | `client-jetbrains/build/distributions/ety-jetbrains-0.0.1.zip` — *Install Plugin from Disk…* |
+| Neovim | Install the `client-neovim` directory via your plugin manager (e.g. `lazy.nvim`) |
 
+Once the plugin is active, open any `.js`/`.jsx` file (or a configured `<script>` host) and ety attaches automatically — diagnostics and hovers appear live as you type, including on unsaved `untitled:` buffers.
 
-jty clean                      # Remove .types/ directory
-jty check src/                 # Validate // T: syntax without generating
-stage - 2
-jty inject src/                # Inject JSDoc into source files (inline casts)
-```
-
-**Options:**
-```
---out <dir>       Output directory (default: .types)
---ext <suffix>    File suffix (default: -ty.jsdoc.js)
---runtime <rt>    Target runtime for init: node, deno
---verbose         Show processed files
---watch           Watch for changes and regenerate
---strict          Treat warnings as errors
---config <file>   Path to jty.config.json
-```
+> **Building from source.** The repo is an npm-workspaces monorepo (`crates/ety-parser`, `server`, `client`). `npm run build:parser` compiles the Rust napi addon, `npm test` runs the Node suite, and `npm run test:e2e` launches a real VS Code against `fixtures/workspace/`. See the README for the full developer workflow.
 
 ---
 
-## Configuration File
+## Configuration
 
-**jty.config.json** (optional):
+Ety is configured through **LSP settings** delivered by the editor (e.g. VS Code's `settings.json` under the `ety.*` namespace), not a project config file. There is no `Ety.config.json`, and no output/watch/runtime settings exist (ety writes nothing and has no watcher or runtime targets).
+
+| Setting | Type | Default | Effect |
+|---------|------|---------|--------|
+| `ety.scriptHosts` | `string[]` | `["html"]` | Host document extensions whose `<script>` bodies ety analyzes. Add `"jsp"`, `"aspx"`, `"tpl"`, `"ftl"` to opt those template formats in. |
+
 ```json
+// VS Code settings.json
 {
-  "include": ["src/**/*.js"],
-  "exclude": ["**/*.test.js", "**/*.spec.js"],
-  "scriptHosts": ["html"],
-  "output": {
-    "dir": ".types",
-    "ext": "-ty.jsdoc.js"
-  },
-  "watch": {
-    "debounce": 100,
-    "persistent": true
-  },
-  "parser": {
-    "strict": true,
-    "unknownTypeError": "warn"
-  },
-  "runtime": "node"
+  "ety.scriptHosts": ["html", "jsp", "aspx", "tpl", "ftl"]
 }
 ```
+
+The setting is read at `initialize` and kept live via `workspace/didChangeConfiguration`: changing it re-projects every open document immediately. Attaching a *new* file type still requires a window reload, because the client's document selector is fixed per session.
 
 ---
 
@@ -2125,7 +1874,9 @@ jty inject src/                # Inject JSDoc into source files (inline casts)
 // T: * Called when user data changes
 ```
 
-**Generated:** `.types/src/models/user-ty.jsdoc.js`
+> ⚠️ **Current behavior:** `typedef`/`callback` are [not yet implemented](#type-definitions). These standalone `// T:` lines bind to no JavaScript node, so the parser emits **no annotations** and the virtual document is **byte-for-byte identical to the source above** — `User`, `Role`, and `OnUserChange` do not resolve yet, and the imports of them in `user-service.js` below would be unresolved. The block below shows the *planned* projection once the feature lands.
+
+**Planned virtual document for `src/models/user.js`** (once `typedef`/`callback` are implemented):
 ```javascript
 /**
  * A registered user in the system
@@ -2135,13 +1886,13 @@ jty inject src/                # Inject JSDoc into source files (inline casts)
  * @property {string} email
  * @property {Role} role
  */
-export const User = {};
+const User = {};
 
 /**
  * User permission level
  * @typedef {'admin' | 'user' | 'guest'} Role
  */
-export const Role = {};
+const Role = {};
 
 /**
  * Called when user data changes
@@ -2150,7 +1901,7 @@ export const Role = {};
  * @param {User | null} prev
  * @returns {void}
  */
-export const OnUserChange = {};
+const OnUserChange = {};
 ```
 
 ---
@@ -2186,14 +1937,14 @@ function updateUsers(users, transform) {
 export { createUser, fetchUser, updateUsers };
 ```
 
-**Generated:** `.types/src/services/user-service-ty.jsdoc.js`
+**Virtual document for `src/services/user-service.js`** (import hoisted to the top; JSDoc injected above each node; **real bodies preserved**):
 ```javascript
-import { User, Role, OnUserChange } from 'src/models/user-ty.jsdoc.js';
+import { User, Role, OnUserChange } from 'src/models/user';
 
 /**
  * @type {Set<OnUserChange>}
  */
-export let subscribers;
+const subscribers = new Set();
 
 /**
  * Creates a new user with the given details
@@ -2203,13 +1954,22 @@ export let subscribers;
  * @returns {User}
  * @throws {Error} If email is invalid
  */
-export function createUser(name, email, role) {}
+function createUser(name, email, role) {
+    return {
+        id: crypto.randomUUID(),
+        name,
+        email,
+        role: role ?? 'user'
+    };
+}
 
 /**
  * @param {string} id
  * @returns {Promise<User | null>}
  */
-export async function fetchUser(id) {}
+async function fetchUser(id) {
+    return api.get(`/users/${id}`);
+}
 
 /**
  * @template {User} T
@@ -2217,8 +1977,14 @@ export async function fetchUser(id) {}
  * @param {function(T): T} transform
  * @returns {T[]}
  */
-export function updateUsers(users, transform) {}
+function updateUsers(users, transform) {
+    return users.map(transform);
+}
+
+export { createUser, fetchUser, updateUsers };
 ```
+
+> The injected JSDoc lines are *additive* — every original line keeps its column positions, so a diagnostic on, say, the `return` inside `createUser` maps straight back to the same line in the real file.
 
 ---
 
@@ -2229,18 +1995,18 @@ export * from './services/user-service';
 export { default as config } from './config';
 ```
 
-**Generated:** `.types/src/index-ty.jsdoc.js`
+**Virtual document for `src/index.js` (re-exports left verbatim):**
 ```javascript
-export * from './models/user-ty.jsdoc.js';
-export * from './services/user-service-ty.jsdoc.js';
-export { default as config } from './config-ty.jsdoc.js';
+export * from './models/user';
+export * from './services/user-service';
+export { default as config } from './config';
 ```
 
 ---
 
 ## Unsupported Features
 
-The following features are explicitly **not supported** in jty v0.2:
+The following features are explicitly **not supported** in Ety v0.2:
 
 | Feature | Reason |
 |---------|--------|
@@ -2274,38 +2040,49 @@ The following features are explicitly **not supported** in jty v0.2:
 | Generic classes | ✅ |
 | Class inheritance | ✅ (with super() in stubs) |
 | Interface implementation | ✅ |
-| Typedef | ✅ (with dummy export) |
-| Callback | ✅ (with dummy export) |
+| Typedef | ⏳ Planned (not yet implemented) |
+| Callback | ⏳ Planned (not yet implemented) |
 | Enum | ✅ (values retained) |
 | Type imports | ✅ (rewritten in stubs) |
 | Barrel exports | ✅ (export *, export {}) |
 | Embedded `<script>` JS | ✅ (`.html` default; `.jsp`/`.aspx`/`.tpl`/`.ftl` opt-in via `scriptHosts`) |
 | Descriptions | ✅ |
 | JSDoc tags | ✅ (@deprecated, @throws, @see, etc.) |
-| Inline casts | ✅ (inject mode only) |
+| Inline casts | ⏳ Deferred (breaks line-only invariant) |
 | Node.js ESM | ✅ |
 | Bun | ✅ |
-| Deno | ✅ (via deno.json imports) |
+| Deno | ✅ |
 
 ---
 
 ## Benefits
 
 1. **Zero Source Clutter** — Source files contain only code and minimal type comments
-2. **Clear Separation** — Generated files isolated in `.types/`
-3. **No Runtime Risk** — Stub files contain no executable logic
-4. **Full IDE Support** — Path mapping provides seamless intellisense
-5. **Valid JavaScript** — Commented and generated files are syntactically correct JS
-6. **Import Compatibility** — Dummy exports satisfy JS module resolution
+2. **Zero Artifacts** — No `.types/` directory, no stub files, nothing to ignore or clean up
+3. **No Runtime Risk** — The real file runs as-is; types live only in the in-memory virtual document
+4. **Full IDE Support** — A language server provides live diagnostics and hovers directly
+5. **Immutable Source** — Your bytes are never edited; the overlay is whole-line and reversible
+6. **No Configuration** — No `jsconfig.json`/`deno.json` `paths` setup required
 7. **JSDoc and TypeScript Aligned** — Semantics match JSDoc and TypeScript conventions
-8. **Barrel Support** — Re-exports work seamlessly
-9. **Distinct Syntax** — `{T}` generic syntax is unique to jty, avoiding HTML/JSX conflicts
-10. **Multi-Runtime** — Works with Node.js, Bun, and Deno
-11. **Error Traceability** — Errors map back to original source locations
+8. **Barrel Support** — Re-exports work seamlessly, resolved against the real module graph
+9. **Distinct Syntax** — `{T}` generic syntax is unique to Ety, avoiding HTML/JSX conflicts
+10. **Multi-Editor** — VS Code, JetBrains, and Neovim plugins over one LSP server
+11. **Error Traceability** — Errors map back to original `// T:` source locations
 
 ---
 
 ## Changelog
+
+### v0.2.0
+
+- **Architecture pivot — LSP, not transpilation.** Ety is now a language server that builds an **in-memory virtual document** and hands it to the TypeScript Language Service, mapping results back to the real source. The prior stub-generation model was removed.
+- **Removed:** the `.types/` shadow directory, `-ty.jsdoc.js` stub files, import-specifier rewriting, the `jsconfig.json`/`deno.json` `paths` requirement, and the `Ety generate`/`clean`/`inject`/`init` CLI.
+- **Removed:** watch mode and the file watcher — updates are driven live by the LSP document lifecycle (incremental sync, server-side debounce).
+- Rewrote **Overview**, **Output Strategy** (now *In-Memory Virtual Document*), **Source Maps** (now two line-number maps `vToO`/`oToV`), and **Live Updates**.
+- **Configuration** is now LSP settings (`ety.*`), not `Ety.config.json`; the only setting is `ety.scriptHosts`.
+- Distributed as editor plugins: VS Code, JetBrains, and Neovim.
+- Inline `as` casts marked **deferred** (incompatible with the line-only/immutable-source invariants).
+- Documented that `typedef` and `callback` are **not yet implemented** — the parser binds annotations only to real AST nodes, and standalone `// T:` declarations are not emitted. Their sections now describe planned syntax.
 
 ### v0.1.3
 
@@ -2315,20 +2092,20 @@ The following features are explicitly **not supported** in jty v0.2:
 
 ### v0.1.2
 
-- Added "When to Use jty" decision guide
+- Added "When to Use Ety" decision guide
 - Added Parser Rules and Ambiguity Resolution section
 - Added Grammar specification (BNF)
 - Added Error Handling and Source Mapping section
 - Added Watch Mode Reliability requirements
-- Added `jty check` command for syntax validation
-- Added `jty.config.json` configuration file support
+- Added `Ety check` command for syntax validation
+- Added `Ety.config.json` configuration file support
 - Added `--strict` and `--config` CLI options
 
 ### v0.1.1
 
 - **Breaking Change:** Generic syntax changed from `<T>` to `{T}`
   - Avoids HTML/JSX conflicts
-  - Provides distinct jty identity
+  - Provides distinct Ety identity
   - All built-in generics now use `{T}`: `Map{K,V}`, `Set{T}`, `Promise{T}`, etc.
 - Added comprehensive Type Syntax Reference with all categories
 - Added generic class support with `@template` on class
