@@ -38,6 +38,15 @@ jobs:
       - run: npm run build:parser
       - run: npm test --workspace server
       - run: npm test --workspace client
+      # Cache the downloaded VS Code build (~256 MB) across runs so e2e doesn't
+      # re-fetch it every time — the cold download is CI's flakiest step
+      # (transient ECONNRESET). runTest.js also retries the download with
+      # backoff for the cold-cache case.
+      - name: Cache VS Code for e2e
+        uses: actions/cache@v4
+        with:
+          path: client/.vscode-test
+          key: vscode-test-${{ runner.os }}
       - run: xvfb-run -a npm run test:e2e --workspace client
 
   neovim:
