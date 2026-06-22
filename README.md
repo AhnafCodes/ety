@@ -1,6 +1,6 @@
 # ety
 
-**Types in comments for plain JavaScript.** Write ordinary `.js`/`.jsx` — no build step, no `.ts` files — and put your types in `// T:` comments. ety is a language server that gives you Type(TypeScript's) diagnostics and hovers on top of untouched JavaScript source.
+**Types in comments for plain JavaScript.** Write ordinary `.js`/`.jsx` — no build step, no `.ts` files — and put your types in `// T:` comments. ety is a language server that gives you Type(TypeScript's) diagnostics and hovers on top of untouched JavaScript source. No Compilation, No Watcher library in codebase need.
 
 ```javascript
 let count = 0;               // T: number
