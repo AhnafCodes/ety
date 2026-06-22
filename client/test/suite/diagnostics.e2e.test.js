@@ -1,6 +1,7 @@
 // Gate 4: a known type error in a real editor lands on the ORIGINAL line and
 // character — the squiggle the user actually sees, after line remapping.
 const assert = require('node:assert');
+const { describe, it } = require('node:test');
 const vscode = require('vscode');
 const { openFixture, until } = require('./helpers');
 

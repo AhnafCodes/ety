@@ -2,6 +2,7 @@
 // extension → client → forked server → napi parser → transformer → TS
 // pipeline, observed from the editor's side.
 const assert = require('node:assert');
+const { describe, it } = require('node:test');
 const vscode = require('vscode');
 const { openFixture, until, hoverText } = require('./helpers');
 
