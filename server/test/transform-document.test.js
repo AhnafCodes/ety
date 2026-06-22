@@ -126,6 +126,42 @@ describe('transformDocument invariants', () => {
         expect([...ignoredLines]).toEqual([0]);
     });
 
+    it('`// T: ignore-start` … `// T: ignore-end` suppress the inclusive range', () => {
+        const source = [
+            'ok();',                  // 0 — outside the block
+            'bad1(); // T: ignore-start', // 1 — the start marker line itself
+            'bad2();',                // 2
+            'bad3();',                // 3
+            'bad4(); // T: ignore-end',   // 4 — the end marker line itself
+            'ok2();',                 // 5 — outside the block
+        ].join('\n') + '\n';
+        const { ignoredLines } = transform(source);
+        expect([...ignoredLines].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    });
+
+    it('an unclosed `// T: ignore-start` suppresses through end of file', () => {
+        const source = ['ok();', 'x(); // T: ignore-start', 'a();', 'b();'].join('\n') + '\n';
+        // 4 lines (the trailing newline yields a 5th empty line at index 4).
+        const { ignoredLines } = transform(source);
+        expect([...ignoredLines].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    });
+
+    it('a stray `// T: ignore-end` with no open block is a no-op', () => {
+        const { ignoredLines } = transform('a();\nb(); // T: ignore-end\nc();\n');
+        expect([...ignoredLines]).toEqual([]);
+    });
+
+    it('single-line and block ignores coexist', () => {
+        const source = [
+            'one(); // T: ignore',       // 0 — single line
+            'two(); // T: ignore-start', // 1
+            'three();',                  // 2
+            'four(); // T: ignore-end',  // 3
+        ].join('\n') + '\n';
+        const { ignoredLines } = transform(source);
+        expect([...ignoredLines].sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
+    });
+
     it('a source with no annotations passes through untouched', () => {
         const source = 'const plain = 1;\nfunction f() { return 2; }\n';
         const { virtualSource, vToO, oToV } = transform(source);
@@ -133,6 +169,118 @@ describe('transformDocument invariants', () => {
         const n = source.split('\n').length;
         expect(vToO.size).toBe(n);
         expect(oToV.size).toBe(n);
+    });
+});
+
+describe('node-bound // T: # descriptors on functions and classes', () => {
+    // The injected JSDoc block sits immediately above the annotated line, so
+    // grab the run of '/**'…'*/' that ends right before it.
+    const blockAbove = (virtualSource, marker) => {
+        const v = virtualSource.split('\n');
+        const at = v.findIndex(l => l.includes(marker));
+        let end = at - 1;
+        while (end >= 0 && v[end] !== ' */') end--;
+        let start = end;
+        while (start >= 0 && v[start] !== '/**') start--;
+        return v.slice(start, end + 1);
+    };
+
+    it('folds a # descriptor into a block-style function as the leading line', () => {
+        const src = [
+            'function f(x) {',
+            '// T: (number) => number',
+            '// T: # Does a thing',
+            '    return x;',
+            '}',
+            '',
+        ].join('\n');
+        expect(blockAbove(transform(src).virtualSource, 'function f')).toEqual([
+            '/**',
+            ' * Does a thing',
+            ' * @type {(p0: number) => number}',
+            ' */',
+        ]);
+    });
+
+    it('prepends a # descriptor to a per-parameter @param/@returns block', () => {
+        const src = [
+            'function add(',
+            '    a, // T: number',
+            '    b  // T: number',
+            ') {',
+            '// T: # Adds two numbers',
+            '    return a + b; // T: => number',
+            '}',
+            '',
+        ].join('\n');
+        const b = blockAbove(transform(src).virtualSource, 'function add');
+        expect(b[0]).toBe('/**');
+        expect(b[1]).toBe(' * Adds two numbers');
+        expect(b).toContain(' * @param {number} a');
+        expect(b).toContain(' * @returns {number}');
+    });
+
+    it('renders a description-only class (no {T} signature) as a leading block', () => {
+        const src = [
+            'class User {',
+            '// T: # Represents a system user',
+            '    name; // T: string',
+            '}',
+            '',
+        ].join('\n');
+        expect(blockAbove(transform(src).virtualSource, 'class User')).toEqual([
+            '/**',
+            ' * Represents a system user',
+            ' */',
+        ]);
+    });
+
+    it('combines a # descriptor with a class {T} @template', () => {
+        const src = [
+            'class Box {',
+            '// T: {T}',
+            '// T: # A generic container',
+            '    value; // T: T',
+            '}',
+            '',
+        ].join('\n');
+        expect(blockAbove(transform(src).virtualSource, 'class Box')).toEqual([
+            '/**',
+            ' * A generic container',
+            ' * @template T',
+            ' */',
+        ]);
+    });
+
+    it('binds a method # descriptor to the method, not the class', () => {
+        const src = [
+            'class C {',
+            '    greet() {',
+            '    // T: () => string',
+            '    // T: # Returns a greeting',
+            '        return "hi";',
+            '    }',
+            '}',
+            '',
+        ].join('\n');
+        expect(blockAbove(transform(src).virtualSource, 'greet()')).toEqual([
+            '/**',
+            ' * Returns a greeting',
+            ' * @type {() => string}',
+            ' */',
+        ]);
+    });
+
+    it('a # descriptor passes JSDoc @-tags through verbatim (e.g. @implements)', () => {
+        const src = [
+            'class R {',
+            '// T: # @implements {Disposable}',
+            '    dispose() { // T: ()',
+            '    }',
+            '}',
+            '',
+        ].join('\n');
+        expect(transform(src).virtualSource).toContain(' * @implements {Disposable}');
     });
 });
 

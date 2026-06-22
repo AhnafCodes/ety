@@ -26,7 +26,8 @@ pub struct EtyAnnotation {
     pub ety_start_offset: u32,
     /// End (exclusive) of the `// T:` comment.
     pub ety_end_offset: u32,
-    /// "function" | "variable" | "property" | "class" | "import" | "param" | "return" | "ignore"
+    /// "function" | "variable" | "property" | "class" | "import" | "param" |
+    /// "return" | "ignore" | "typedef" | "callback" | "desc"
     pub kind: String,
     /// Declaration name; empty for anonymous functions/classes and imports.
     /// For "param" it is the parameter name.
@@ -118,11 +119,12 @@ fn class_body_first_element(body: &ClassBody) -> u32 {
     body.body.first().map(|e| e.span().start).unwrap_or(body.span.end)
 }
 
-/// Split a typedef payload (`Name = Body`) into `(name, body)` on the first
+/// Split a declaration payload (`Name = Body`) into `(name, body)` on the first
 /// real `=` — one that is not the `=` of a `=>` arrow, so a function-type body
-/// keeps its arrow intact. No `=` (malformed `typedef Name`) yields
-/// `(name, "")`; a leading `=` (malformed `typedef = Body`) yields `("", body)`.
-fn split_typedef(rest: &str) -> (&str, &str) {
+/// (a callback) keeps its arrow intact. No `=` (malformed `Name`) yields
+/// `(name, "")`; a leading `=` (malformed `= Body`) yields `("", body)`. Shared
+/// by `typedef` and `callback`.
+fn split_name_body(rest: &str) -> (&str, &str) {
     let bytes = rest.as_bytes();
     for i in 0..bytes.len() {
         if bytes[i] == b'=' && bytes.get(i + 1) != Some(&b'>') {
@@ -132,9 +134,35 @@ fn split_typedef(rest: &str) -> (&str, &str) {
     (rest.trim(), "")
 }
 
+/// Build a standalone declaration annotation (`typedef`/`callback`) from a
+/// normalized payload `p` like "typedef Name = Body". Strips the reserved
+/// `keyword` (with its trailing space) and splits Name = Body. The body is kept
+/// VERBATIM in `ety`: a ` - ` inside it is a per-property/per-param description
+/// (handled downstream by the transformer), NOT the declaration's whole
+/// description — that is a separate `// T: #` descriptor line. Offsets are the
+/// comment's own span — it binds to no AST node.
+fn decl_annotation(s: u32, e: u32, p: &str, keyword: &str, kind: &str) -> EtyAnnotation {
+    let rest = p[keyword.len()..].trim_start();
+    let (name, body) = split_name_body(rest);
+    EtyAnnotation {
+        node_start_offset: s,
+        ety_start_offset: s,
+        ety_end_offset: e,
+        kind: kind.to_string(),
+        name: name.to_string(),
+        ety: body.to_string(),
+        doc: String::new(),
+    }
+}
+
 struct EtyVisitor<'a> {
     source: &'a str,
     annotations: Vec<TComment<'a>>,
+    /// `// T: #` descriptor comments, sorted by start. Kept separate from
+    /// `annotations` so the signature check never mistakes a descriptor for a
+    /// type; each node's inside-block check binds the descriptor that sits in its
+    /// body to the node (whole-declaration description).
+    desc_comments: Vec<TComment<'a>>,
     results: Vec<EtyAnnotation>,
     /// (function start, body start, body end) for every function with a body —
     /// used to bind a `// T: => R` return comment to the innermost enclosing
@@ -153,6 +181,26 @@ impl<'a> EtyVisitor<'a> {
             ety: c.2.to_string(),
             doc: String::new(),
         });
+    }
+
+    /// Bind a `// T: #` descriptor sitting inside `node`'s body (the inside-block
+    /// window) to that node. `node_start` is the injection point/grouping key —
+    /// the same one the node's signature annotation uses, so the transformer
+    /// merges them. Payload is the text after the `#`. The method/function
+    /// double-fire on the same body is resolved by the offset dedupe (the method
+    /// entry, pushed first, wins), exactly like the signature path.
+    fn push_desc(&mut self, node_start: u32, body_open: u32, first_element: u32) {
+        if let Some(&c) = check_block(body_open, first_element, &self.desc_comments) {
+            self.results.push(EtyAnnotation {
+                node_start_offset: node_start,
+                ety_start_offset: c.0,
+                ety_end_offset: c.1,
+                kind: "desc".to_string(),
+                name: String::new(),
+                ety: c.2[1..].trim().to_string(), // text after the leading '#'
+                doc: String::new(),
+            });
+        }
     }
 
     /// A per-parameter annotation: `node_start` is the ENCLOSING function's
@@ -212,6 +260,7 @@ impl<'a> Visit<'a> for EtyVisitor<'a> {
                 let name = func.id.as_ref().map_or("", |id| id.name.as_str());
                 self.push(func.span.start, c, "function", name);
             }
+            self.push_desc(func.span.start, body.span.start, function_body_first_element(body));
             self.fn_bodies.push((func.span.start, body.span.start, body.span.end));
         }
         // Per-parameter annotations: the upper bound for the LAST param is the
@@ -232,6 +281,11 @@ impl<'a> Visit<'a> for EtyVisitor<'a> {
             ) {
                 self.push(arrow.span.start, c, "function", "");
             }
+            self.push_desc(
+                arrow.span.start,
+                arrow.body.span.start,
+                function_body_first_element(&arrow.body),
+            );
             // Only a block body can hold a `// T: => R` return comment.
             self.fn_bodies.push((arrow.span.start, arrow.body.span.start, arrow.body.span.end));
         }
@@ -251,6 +305,7 @@ impl<'a> Visit<'a> for EtyVisitor<'a> {
                 let name = method.key.static_name();
                 self.push(method.span.start, c, "function", name.as_deref().unwrap_or(""));
             }
+            self.push_desc(method.span.start, body.span.start, function_body_first_element(body));
         }
         // The walk now descends into method.value, where visit_function runs
         // check_block on the SAME body — the dedupe pass keeps this (first) one.
@@ -268,6 +323,11 @@ impl<'a> Visit<'a> for EtyVisitor<'a> {
             let name = class.id.as_ref().map_or("", |id| id.name.as_str());
             self.push(class.span.start, c, "class", name);
         }
+        self.push_desc(
+            class.span.start,
+            class.body.span.start,
+            class_body_first_element(&class.body),
+        );
         walk::walk_class(self, class);
     }
 
@@ -323,8 +383,13 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
     // so pull it out before node matching. node_start_offset is the comment's
     // own start, so the transformer derives the directive's line from it; the
     // handler then drops any diagnostic whose remapped original line matches.
+    // `// T: ignore-start` / `// T: ignore-end` are the block form: the
+    // transformer pairs them up and suppresses every line in between. All four
+    // share kind "ignore" — the transformer routes on the exact payload.
     let (ignores, candidates): (Vec<_>, Vec<_>) =
-        candidates.into_iter().partition(|(_, _, p)| *p == "ignore" || *p == "i");
+        candidates.into_iter().partition(|(_, _, p)| {
+            *p == "ignore" || *p == "i" || *p == "ignore-start" || *p == "ignore-end"
+        });
 
     // `// T: typedef Name = Body` is a standalone TYPE DECLARATION, not a type
     // bound to a node. `typedef` is a reserved leading word (followed by a
@@ -334,8 +399,31 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
     let (typedefs, candidates): (Vec<_>, Vec<_>) =
         candidates.into_iter().partition(|(_, _, p)| p.starts_with("typedef "));
 
-    let mut visitor =
-        EtyVisitor { source, annotations: candidates, results: Vec::new(), fn_bodies: Vec::new() };
+    // `// T: callback Name = (params) => Return` is the function-type cousin of
+    // typedef — another reserved leading word, another node-less declaration.
+    // The transformer decomposes the body into a hoisted @callback block.
+    let (callbacks, candidates): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|(_, _, p)| p.starts_with("callback "));
+
+    // `// T: # text` is a DESCRIPTOR — the whole-declaration description, as
+    // opposed to a per-property ` - `. It is pulled out of the signature stream
+    // (so the type check never sees it) but still handed to the visitor: a
+    // descriptor INSIDE a function/class/method body binds to that node (its
+    // inside-block window), while one at module scope (after a typedef/callback)
+    // stays node-less and the transformer keys it by line.
+    let (descs, candidates): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|(_, _, p)| p.starts_with('#'));
+    // check_block requires the comment list sorted by start.
+    let mut desc_comments = descs.clone();
+    desc_comments.sort_by_key(|(s, _, _)| *s);
+
+    let mut visitor = EtyVisitor {
+        source,
+        annotations: candidates,
+        desc_comments,
+        results: Vec::new(),
+        fn_bodies: Vec::new(),
+    };
     visitor.visit_program(&ret.program);
 
     // Bind each return comment to the innermost enclosing function — the
@@ -380,31 +468,35 @@ pub fn parse_source(source: &str) -> Vec<EtyAnnotation> {
         ety: p.to_string(),
         doc: String::new(),
     }));
-    results.extend(typedefs.into_iter().map(|(s, e, p)| {
-        // p == "typedef <Name> = <Body>" (already normalized). Strip the
-        // reserved leading word, split Name = Body on the first real `=`, then
-        // reuse the `param` ` - ` convention to peel a trailing description.
-        let rest = p["typedef ".len()..].trim_start();
-        let (name, body) = split_typedef(rest);
-        let (ety, doc) = body
-            .split_once(" - ")
-            .map_or((body, ""), |(t, d)| (t.trim(), d.trim()));
-        EtyAnnotation {
-            node_start_offset: s,
-            ety_start_offset: s,
-            ety_end_offset: e,
-            kind: "typedef".to_string(),
-            name: name.to_string(),
-            ety: ety.to_string(),
-            doc: doc.to_string(),
-        }
-    }));
+    // typedef/callback share the same shape: strip the reserved leading word,
+    // split Name = Body, keep the body verbatim (a ` - ` is a per-property/param
+    // description, not the whole-decl descriptor — that's a `// T: #` line).
+    // They differ only in keyword and kind; the transformer routes on kind.
+    results.extend(typedefs.into_iter().map(|(s, e, p)| decl_annotation(s, e, p, "typedef ", "typedef")));
+    results.extend(callbacks.into_iter().map(|(s, e, p)| decl_annotation(s, e, p, "callback ", "callback")));
+    // Node-bound descriptors (bound by the visitor above) go in FIRST so they
+    // win the offset dedupe below over the node-less fallback that follows.
     results.extend(visitor.results);
+    // Node-less fallback: every descriptor also gets a node-less entry (own
+    // offset, like an import). For a descriptor the visitor already bound to a
+    // node, this entry loses the dedupe; for a module-scope descriptor (after a
+    // typedef/callback), it is the one that survives and the transformer keys it
+    // by line.
+    results.extend(descs.into_iter().map(|(s, e, p)| EtyAnnotation {
+        node_start_offset: s,
+        ety_start_offset: s,
+        ety_end_offset: e,
+        kind: "desc".to_string(),
+        name: String::new(),
+        ety: p[1..].trim().to_string(),
+        doc: String::new(),
+    }));
 
     // Dedupe by ety_start_offset, keeping the first match (Gate 1 mandate).
     // The visitor double-fires on class methods: visit_method_definition and
     // then visit_function check the same body; traversal order guarantees the
-    // method entry comes first.
+    // method entry comes first. A node-bound descriptor likewise precedes its
+    // node-less twin, so the bound one is the keeper.
     let mut seen = std::collections::HashSet::new();
     results.retain(|a| seen.insert(a.ety_start_offset));
 
@@ -777,6 +869,23 @@ mod tests {
     }
 
     #[test]
+    fn ignore_block_markers_are_standalone_directives() {
+        // `// T: ignore-start` / `// T: ignore-end` are the block form of the
+        // ignore directive: both bind to no node and surface as kind "ignore"
+        // with the exact payload preserved so the transformer can pair them.
+        for marker in ["ignore-start", "ignore-end"] {
+            let source = format!("foo(); // T: {marker}\n");
+            let result = parse_source(&source);
+            assert_eq!(result.len(), 1, "marker: {marker}");
+            assert_eq!(result[0].kind, "ignore");
+            assert_eq!(result[0].ety, marker);
+            assert_eq!(result[0].name, "");
+            let cs = source.find("//").unwrap() as u32;
+            assert_eq!(result[0].node_start_offset, cs);
+        }
+    }
+
+    #[test]
     fn ignore_does_not_shadow_a_type_named_with_a_longer_payload() {
         // Only the EXACT payloads "ignore"/"i" are directives; a type that
         // merely contains them (e.g. "ignored") is a normal annotation.
@@ -790,11 +899,43 @@ mod tests {
     // --- typedef declaration (`// T: typedef Name = Body`) ---
 
     #[test]
-    fn split_typedef_first_real_equals_not_arrow() {
-        assert_eq!(split_typedef("User = { id: string }"), ("User", "{ id: string }"));
-        assert_eq!(split_typedef("Fn = (x: number) => string"), ("Fn", "(x: number) => string"));
-        assert_eq!(split_typedef("User"), ("User", "")); // malformed: no =
-        assert_eq!(split_typedef("= number"), ("", "number")); // malformed: no name
+    fn split_name_body_first_real_equals_not_arrow() {
+        assert_eq!(split_name_body("User = { id: string }"), ("User", "{ id: string }"));
+        assert_eq!(split_name_body("Fn = (x: number) => string"), ("Fn", "(x: number) => string"));
+        assert_eq!(split_name_body("User"), ("User", "")); // malformed: no =
+        assert_eq!(split_name_body("= number"), ("", "number")); // malformed: no name
+    }
+
+    // --- callback declaration (`// T: callback Name = (params) => Return`) ---
+
+    #[test]
+    fn callback_is_standalone_with_function_body_kept_verbatim() {
+        let source = "// T: callback Mapper = {T, U}(item: T, index: number) => U\n";
+        let result = parse_source(source);
+        assert_eq!(result.len(), 1);
+        let a = &result[0];
+        assert_eq!(a.kind, "callback");
+        assert_eq!(a.name, "Mapper");
+        assert_eq!(a.ety, "{T, U}(item: T, index: number) => U"); // arrow survives the name split
+        let cs = source.find("//").unwrap() as u32;
+        assert_eq!(a.node_start_offset, cs);
+    }
+
+    #[test]
+    fn callback_keeps_a_per_param_dash_in_the_body_verbatim() {
+        // Same rule as typedef: a ` - ` is a per-param description kept verbatim
+        // in the body; the whole-declaration description is a `// T: #` line.
+        let a = &parse_source("// T: callback OnChange = (value: string - the value) => void\n")[0];
+        assert_eq!(a.ety, "(value: string - the value) => void");
+        assert_eq!(a.doc, "");
+    }
+
+    #[test]
+    fn callback_requires_a_trailing_space_after_the_keyword() {
+        let result = parse_source("let x = 1; // T: callback\n");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].kind, "variable");
+        assert_eq!(result[0].ety, "callback");
     }
 
     #[test]
@@ -814,11 +955,66 @@ mod tests {
     }
 
     #[test]
-    fn typedef_peels_a_dash_description_into_doc() {
-        let source = "// T: typedef User = { id: string } - A registered user\n";
+    fn typedef_keeps_a_per_property_dash_in_the_body_verbatim() {
+        // ` - ` is a per-property description inside the object body, not the
+        // typedef's whole-declaration descriptor (that is a `// T: #` line), so
+        // the body is kept verbatim and `doc` stays empty.
+        let source = "// T: typedef User = { id: string - unique id, name: string }\n";
         let a = &parse_source(source)[0];
-        assert_eq!(a.ety, "{ id: string }");
-        assert_eq!(a.doc, "A registered user");
+        assert_eq!(a.ety, "{ id: string - unique id, name: string }");
+        assert_eq!(a.doc, "");
+    }
+
+    #[test]
+    fn hash_line_emits_a_node_less_desc_annotation() {
+        // `// T: # text` is the whole-declaration descriptor: node-less, kind
+        // "desc", payload is the text after the `#`. The transformer attaches it
+        // to the declaration on the preceding line(s).
+        let source = "// T: # A registered user\n";
+        let result = parse_source(source);
+        assert_eq!(result.len(), 1);
+        let a = &result[0];
+        assert_eq!(a.kind, "desc");
+        assert_eq!(a.name, "");
+        assert_eq!(a.ety, "A registered user");
+        let cs = source.find("//").unwrap() as u32;
+        assert_eq!(a.node_start_offset, cs);
+        assert_eq!(a.ety_start_offset, cs);
+    }
+
+    #[test]
+    fn hash_descriptor_inside_a_function_body_binds_to_the_function() {
+        // A `// T: #` in a body is the node's whole-declaration description: it
+        // binds to the function (node_start = the function), not to itself.
+        let source = "function f(x) {\n// T: (number) => number\n// T: # does a thing\n    return x;\n}\n";
+        let result = parse_source(source);
+        let desc = result.iter().find(|a| a.kind == "desc").expect("a desc annotation");
+        assert_eq!(desc.ety, "does a thing");
+        let fn_start = source.find("function").unwrap() as u32;
+        assert_eq!(desc.node_start_offset, fn_start);
+        assert!(desc.node_start_offset < desc.ety_start_offset); // node-bound, not node-less
+    }
+
+    #[test]
+    fn hash_descriptor_in_a_class_body_binds_to_the_class() {
+        // The class carries only a description (no `{T}` signature); it still
+        // binds to the class node so the transformer can emit a leading JSDoc.
+        let source = "class C {\n// T: # a thing\n    x;\n}\n";
+        let result = parse_source(source);
+        let desc = result.iter().find(|a| a.kind == "desc").expect("a desc annotation");
+        assert_eq!(desc.ety, "a thing");
+        assert_eq!(desc.node_start_offset, source.find("class").unwrap() as u32);
+    }
+
+    #[test]
+    fn hash_descriptor_after_a_typedef_stays_node_less() {
+        // At module scope (not inside any body) a descriptor binds to no node;
+        // the transformer keys it by line onto the preceding typedef/callback.
+        let source = "// T: typedef U = { x: number }\n// T: # a user\n";
+        let result = parse_source(source);
+        let desc = result.iter().find(|a| a.kind == "desc").expect("a desc annotation");
+        assert_eq!(desc.ety, "a user");
+        assert_eq!(desc.node_start_offset, desc.ety_start_offset); // node-less
     }
 
     #[test]

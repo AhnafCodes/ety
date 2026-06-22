@@ -132,10 +132,24 @@ user.naem;                 // T: ignore   (typo silenced on this line)
 widen(0.1 + 0.2);          // T:i         (shorthand)
 ```
 
-It injects nothing into the virtual document; it only marks its line so the
-language server drops any diagnostic that maps back to it. Only the exact
-payloads `ignore` and `i` are directives — a type literally named `ignored`
-is still a normal annotation.
+To silence a span rather than a single line, bracket it with
+`// T: ignore-start` and `// T: ignore-end`. Every line in the inclusive range
+— both marker lines included — is suppressed:
+
+```javascript
+// T: ignore-start
+const legacy = doStuff();  // diagnostics here are silenced
+legacy.whatever();         // …and here
+// T: ignore-end
+```
+
+An `ignore-start` with no matching `ignore-end` suppresses through the end of
+the file; a stray `ignore-end` with no open block does nothing.
+
+These directives inject nothing into the virtual document; they only mark lines
+so the language server drops any diagnostic that maps back to them. Only the
+exact payloads `ignore`, `i`, `ignore-start`, and `ignore-end` are directives —
+a type literally named `ignored` is still a normal annotation.
 
 ## Project layout
 

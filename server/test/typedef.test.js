@@ -36,9 +36,11 @@ describe('parser: typedef emission (node-less, own offsets)', () => {
         expect(a).toMatchObject({ kind: 'typedef', name: 'Fn', ety: '(x: number) => string' });
     });
 
-    it('reuses the - description convention, leaving the body clean', () => {
-        const [a] = parse_ety('// T: typedef User = { id: string } - A registered user\n');
-        expect(a).toMatchObject({ name: 'User', ety: '{ id: string }', doc: 'A registered user' });
+    it('keeps a per-property - inside the body verbatim, with an empty doc', () => {
+        // ` - ` is a per-property description, not the typedef's whole-declaration
+        // descriptor (that is a `// T: #` line), so the body survives verbatim.
+        const [a] = parse_ety('// T: typedef User = { id: string - unique id, name: string }\n');
+        expect(a).toMatchObject({ name: 'User', ety: '{ id: string - unique id, name: string }', doc: '' });
     });
 
     it('malformed (no =) keeps the name and an empty body — never a crash', () => {
@@ -53,6 +55,11 @@ describe('parser: typedef emission (node-less, own offsets)', () => {
 
     it('a // T: typedef inside a string literal is not a comment → no annotation', () => {
         expect(parse_ety('const s = "// T: typedef X = number";\n')).toEqual([]);
+    });
+
+    it('a // T: # line emits a node-less desc annotation (text after the #)', () => {
+        const [a] = parse_ety('// T: # A registered user\n');
+        expect(a).toMatchObject({ kind: 'desc', name: '', ety: 'A registered user', doc: '' });
     });
 });
 
@@ -86,12 +93,50 @@ describe('transform: hoisted inline-object projection + synthetic export const',
         expect(oToV.get(0)).toBe(4);                     // comment's own oToV is its verbatim copy, not the hoist
     });
 
-    it('renders the - description as the JSDoc block leading line, above @typedef', () => {
-        const { virtualSource } = transform('// T: typedef User = { id: string } - A registered user\n');
+    it('renders a following // T: # line as the JSDoc leading line, above @typedef', () => {
+        const { virtualSource } = transform('// T: typedef User = { id: string }\n// T: # A registered user\n');
         const v = virtualSource.split('\n');
         expect(v[0]).toBe('/**');
         expect(v[1]).toBe(' * A registered user');
         expect(v[2]).toBe(' * @typedef {{ id: string }} User');
+    });
+
+    it('joins multiple contiguous // T: # lines as separate leading lines', () => {
+        const { virtualSource } = transform('// T: typedef User = { id: string }\n// T: # line one\n// T: # line two\n');
+        const v = virtualSource.split('\n');
+        expect(v[1]).toBe(' * line one');
+        expect(v[2]).toBe(' * line two');
+        expect(v[3]).toBe(' * @typedef {{ id: string }} User');
+    });
+
+    it('expands an object body with per-property - descriptions into @property tags', () => {
+        const { virtualSource } = transform('// T: typedef User = { id: string - unique id, name?: string - display name }\n');
+        const v = virtualSource.split('\n');
+        expect(v[0]).toBe('/**');
+        expect(v[1]).toBe(' * @typedef {Object} User');
+        expect(v[2]).toBe(' * @property {string} id - unique id');
+        expect(v[3]).toBe(' * @property {string} [name] - display name');
+        expect(v[4]).toBe(' */');
+        expect(v[5]).toBe('export const User = {};');
+    });
+
+    it('combines a # descriptor with per-property @property expansion', () => {
+        const { virtualSource } = transform('// T: typedef User = { id: string - unique id }\n// T: # A registered user\n');
+        const v = virtualSource.split('\n');
+        expect(v[1]).toBe(' * A registered user');
+        expect(v[2]).toBe(' * @typedef {Object} User');
+        expect(v[3]).toBe(' * @property {string} id - unique id');
+    });
+
+    it('runs @property types through convertGenerics (Map{K,V} → Map<K,V>)', () => {
+        const { virtualSource } = transform('// T: typedef T = { m: Map{string, User} - the map }\n');
+        expect(virtualSource).toContain(' * @property {Map<string, User>} m - the map');
+    });
+
+    it('keeps the inline-object form when an object body has no per-property descriptions', () => {
+        const { virtualSource } = transform('// T: typedef User = { id: string, name: string }\n');
+        expect(virtualSource).toContain(' * @typedef {{ id: string, name: string }} User');
+        expect(virtualSource).not.toContain('@property');
     });
 
     it('runs the body through convertGenerics (Map{K,V} → Map<K,V>)', () => {
@@ -154,6 +199,23 @@ describe('end-to-end: the typedef participates in type-checking (real TS pipelin
         // the error text sits on the user's value, in the body — not in the hoisted JSDoc
         const span = virtualSource.slice(diags[0].start, diags[0].start + diags[0].length);
         expect(span).toContain('id');
+    });
+
+    it('the @property-expanded form (per-property descriptions) still type-checks', () => {
+        const ok = [
+            '// T: typedef User = { id: string - unique id, name: string - display name }',
+            'const u = { id: "1", name: "n" }; // T: User',
+            '',
+        ].join('\n');
+        expect(serviceFor(ok).diags).toEqual([]);
+
+        const bad = [
+            '// T: typedef User = { id: string - unique id, name: string - display name }',
+            'const u = { id: 1, name: "n" }; // T: User',
+            '',
+        ].join('\n');
+        const { diags } = serviceFor(bad);
+        expect(diags.map(d => d.code)).toEqual([2322]); // number not assignable to string
     });
 });
 

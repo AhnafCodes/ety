@@ -1,0 +1,16 @@
+{
+  "name": "desc-line",
+  "description": "A `// T: #` descriptor line: node-less, kind desc, payload is the text after the `#`. The transformer attaches it to the declaration on the preceding line(s).",
+  "source": "// T: # A registered user\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 25,
+      "kind": "desc",
+      "name": "",
+      "ety": "A registered user",
+      "doc": ""
+    }
+  ]
+}

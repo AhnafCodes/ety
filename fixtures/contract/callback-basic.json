@@ -1,0 +1,16 @@
+{
+  "name": "callback-basic",
+  "description": "Standalone callback (function type): node-less, kind callback, body preserved for the transformer to decompose.",
+  "source": "// T: callback OnSuccess = (data: any) => void\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 46,
+      "kind": "callback",
+      "name": "OnSuccess",
+      "ety": "(data: any) => void",
+      "doc": ""
+    }
+  ]
+}
