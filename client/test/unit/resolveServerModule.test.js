@@ -8,10 +8,10 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { resolveServerModule } from '../../src/resolveServerModule.js';
 
-const SRC = '/ext/src'; // stands in for __dirname of extension.js
-// Packaged: server/ at the extension root, one level up from src/.
-const BUNDLED = path.join(SRC, '..', 'server', 'src', 'main.js');
-// Dev: the sibling server/ workspace, two levels up from src/.
+const SRC = '/ext/dist'; // stands in for __dirname of the bundled extension.js
+// Packaged: the server bundle sits beside extension.js in dist/.
+const BUNDLED = path.join(SRC, 'server.js');
+// Dev: the sibling server/ workspace source, two levels up from dist/.
 const DEV = path.join(SRC, '..', '..', 'server', 'src', 'main.js');
 
 // Inject a deterministic existence predicate so the test never touches disk.
@@ -32,6 +32,6 @@ describe('resolveServerModule', () => {
 
     it('throws a clear error naming both locations when neither exists', () => {
         expect(() => resolveServerModule(SRC, { exists: existsOnly() }))
-            .toThrow(/could not locate server[/\\]src[/\\]main\.js/);
+            .toThrow(/could not locate the server/);
     });
 });

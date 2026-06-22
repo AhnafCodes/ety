@@ -1,0 +1,16 @@
+{
+  "name": "callback-multi-template",
+  "description": "Two type params: {T, U} -> @template T, @template U.",
+  "source": "// T: callback Mapper = {T, U}(item: T, index: number) => U\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 59,
+      "kind": "callback",
+      "name": "Mapper",
+      "ety": "{T, U}(item: T, index: number) => U",
+      "doc": ""
+    }
+  ]
+}

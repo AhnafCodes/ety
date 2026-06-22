@@ -1,0 +1,16 @@
+{
+  "name": "callback-generic",
+  "description": "Generic callback: {T} type-param list kept in the body; transformer emits @template before @callback.",
+  "source": "// T: callback Comparator = {T}(a: T, b: T) => number\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 53,
+      "kind": "callback",
+      "name": "Comparator",
+      "ety": "{T}(a: T, b: T) => number",
+      "doc": ""
+    }
+  ]
+}

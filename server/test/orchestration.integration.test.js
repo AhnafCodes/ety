@@ -53,4 +53,39 @@ describe('onDidChangeContent orchestration', () => {
             diagnostics: [],
         });
     });
+
+    it('an `// T: ignore-start`/`// T: ignore-end` block suppresses a real TS error inside it, but not one outside', () => {
+        // End-to-end proof for the block directive: two genuine type errors,
+        // one bracketed by the block (must be dropped) and one after the block
+        // (must survive). Real parser + transformer + TS service + the
+        // ignoredLines suppression filter, all driven through processDocument.
+        const source = [
+            'let count = 0; // T: number', // 0
+            '// T: ignore-start',          // 1
+            'count = "suppressed";',       // 2 — type error INSIDE the block
+            '// T: ignore-end',            // 3
+            'count = "surfaced";',         // 4 — type error AFTER the block
+        ].join('\n') + '\n';
+
+        const state = createState();
+        const deps = {
+            connection: { sendDiagnostics: vi.fn(), console: { error: vi.fn() } },
+            parse_ety,
+        };
+        deps.tsService = createTsService({ virtualDocs: state.virtualDocs, versions: state.versions });
+
+        processDocument(state, deps, { uri: PATH, version: 1, getText: () => source });
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(deps.connection.sendDiagnostics).toHaveBeenCalledTimes(1);
+
+        const { diagnostics } = deps.connection.sendDiagnostics.mock.calls[0][0];
+        // Only the error on original line 4 survives; the one on line 2 is
+        // dropped because lines 1–3 are suppressed by the block.
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0].range).toEqual({
+            start: { line: 4, character: 0 },
+            end: { line: 4, character: 5 },
+        });
+        expect(diagnostics[0].message).toMatch(/not assignable to type 'number'/);
+    });
 });

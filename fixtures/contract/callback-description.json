@@ -1,0 +1,16 @@
+{
+  "name": "callback-description",
+  "description": "callback body kept VERBATIM: a trailing ` - ` is no longer peeled into doc — the whole-declaration descriptor is a separate `// T: #` line, and ` - ` denotes a per-param description handled downstream.",
+  "source": "// T: callback OnChange = (value: string) => void - Called on change\n",
+  "expected": [
+    {
+      "nodeStartOffset": 0,
+      "etyStartOffset": 0,
+      "etyEndOffset": 68,
+      "kind": "callback",
+      "name": "OnChange",
+      "ety": "(value: string) => void - Called on change",
+      "doc": ""
+    }
+  ]
+}

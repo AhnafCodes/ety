@@ -11,18 +11,19 @@ const path = require('node:path');
  * @returns {string} absolute-ish path to server/src/main.js
  */
 function resolveServerModule(fromDir, { exists = fs.existsSync } = {}) {
-    // Production .vsix: server/ is bundled at the extension root, one level up
-    // from src/ — this branch must win so an installed extension never reaches
+    // Production .vsix: the server bundle sits beside the bundled extension.js
+    // in dist/ — this branch must win so an installed extension never reaches
     // for a monorepo that isn't there.
-    const bundled = path.join(fromDir, '..', 'server', 'src', 'main.js');
+    const bundled = path.join(fromDir, 'server.js');
     if (exists(bundled)) return bundled;
 
-    // Dev / F5: the sibling server/ workspace, two levels up from src/.
+    // Dev / F5 without a build: the sibling server/ workspace source, two
+    // levels up from dist/ (dist → client → repo root → server/).
     const dev = path.join(fromDir, '..', '..', 'server', 'src', 'main.js');
     if (exists(dev)) return dev;
 
     throw new Error(
-        `ety: could not locate server/src/main.js (looked in: ${bundled}; ${dev})`
+        `ety: could not locate the server (looked in: ${bundled}; ${dev})`
     );
 }
 

@@ -1,0 +1,25 @@
+{
+  "name": "ignore-block",
+  "description": "`// T: ignore-start` / `// T: ignore-end` are the block form of the ignore directive: both bind to no node and surface as kind \"ignore\" with the exact payload preserved, so the transformer can pair them and suppress the inclusive range.",
+  "source": "a(); // T: ignore-start\nb(); // T: ignore-end\n",
+  "expected": [
+    {
+      "nodeStartOffset": 5,
+      "etyStartOffset": 5,
+      "etyEndOffset": 23,
+      "kind": "ignore",
+      "name": "",
+      "ety": "ignore-start",
+      "doc": ""
+    },
+    {
+      "nodeStartOffset": 29,
+      "etyStartOffset": 29,
+      "etyEndOffset": 45,
+      "kind": "ignore",
+      "name": "",
+      "ety": "ignore-end",
+      "doc": ""
+    }
+  ]
+}

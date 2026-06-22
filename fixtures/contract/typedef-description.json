@@ -1,6 +1,6 @@
 {
   "name": "typedef-description",
-  "description": "typedef with a trailing - description: split into doc, body stays clean (reuses the param - convention).",
+  "description": "typedef body kept VERBATIM: a trailing ` - ` is no longer peeled into doc — the whole-declaration descriptor is a separate `// T: #` line, and ` - ` denotes a per-property description handled downstream.",
   "source": "// T: typedef User = { id: string, name: string } - A registered user\n",
   "expected": [
     {
@@ -9,8 +9,8 @@
       "etyEndOffset": 69,
       "kind": "typedef",
       "name": "User",
-      "ety": "{ id: string, name: string }",
-      "doc": "A registered user"
+      "ety": "{ id: string, name: string } - A registered user",
+      "doc": ""
     }
   ]
 }
