@@ -20,7 +20,7 @@ function createUser(name, role) {
 
 ## Why? ety - EcmaScript Type Comments.
 
-Ety is inspired from Python's Type Comments, a Hidden GEM(first form of hinting was the type comment (PEP 484/[526](https://peps.python.org/pep-0526/))).
+Ety is inspired from Python's Type Comments, a Hidden GEM(first form of hinting was the Type Comments (PEP 484/[526](https://peps.python.org/pep-0526/))).
 
 <img width="1024" height="559" alt="678063c1-d592-4167-8f12-d535e262b136" src="https://github.com/user-attachments/assets/cffad46b-c416-4dc5-8f56-4e85894b2cb3" />
 
