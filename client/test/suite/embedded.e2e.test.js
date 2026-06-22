@@ -4,6 +4,7 @@
 // Code client's host-glob document selector. The Gate-4 diagnostics check, now
 // from a host document.
 const assert = require('node:assert');
+const { describe, it } = require('node:test');
 const vscode = require('vscode');
 const { openFixture, until } = require('./helpers');
 

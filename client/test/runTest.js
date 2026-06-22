@@ -1,5 +1,5 @@
 // @vscode/test-electron entry point: downloads VS Code, loads the extension
-// in development mode, opens fixtures/workspace, and runs the mocha suite.
+// in development mode, opens fixtures/workspace, and runs the node:test suite.
 const path = require('node:path');
 const { runTests, downloadAndUnzipVSCode } = require('@vscode/test-electron');
 

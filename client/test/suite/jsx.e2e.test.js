@@ -2,6 +2,7 @@
 // REAL JSX — proves the javascriptreact documentSelector and jsx: Preserve
 // work together (TS parses <div> as JSX, not as comparison operators).
 const assert = require('node:assert');
+const { describe, it } = require('node:test');
 const vscode = require('vscode');
 const { openFixture, until, hoverText } = require('./helpers');
 
