@@ -36,6 +36,7 @@
     "vscode:prepublish": "node esbuild.mjs",
     "package": "vsce package --no-dependencies",
     "test": "vitest run",
+    "pretest:e2e": "node esbuild.mjs",
     "test:e2e": "node test/runTest.js"
   },
   "dependencies": {
