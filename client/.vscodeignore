@@ -1,0 +1,8 @@
+# Everything the extension needs at runtime is bundled into dist/ by
+# esbuild.mjs (run via vscode:prepublish), so ship that and nothing else.
+**
+!dist/**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md

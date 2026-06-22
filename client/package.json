@@ -4,10 +4,14 @@
   "version": "0.0.1",
   "private": true,
   "publisher": "ety",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AhnafCodes/ety.git"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
-  "main": "./src/extension.js",
+  "main": "./dist/extension.js",
   "activationEvents": [
     "onLanguage:javascript",
     "onLanguage:javascriptreact",
@@ -28,6 +32,9 @@
     }
   },
   "scripts": {
+    "build": "node esbuild.mjs",
+    "vscode:prepublish": "node esbuild.mjs",
+    "package": "vsce package --no-dependencies",
     "test": "vitest run",
     "test:e2e": "node test/runTest.js"
   },
@@ -36,6 +43,7 @@
   },
   "devDependencies": {
     "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.0",
     "mocha": "^11.3.0",
     "vitest": "^4.1.8"
   }
