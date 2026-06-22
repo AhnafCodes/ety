@@ -2,7 +2,7 @@
 
 # //T or EcmaScript Type Comments Specification(ety)
 
-**Version:** 0.2.1  
+**Version:** 0.2.2  
 **Status:** Draft
 
 
@@ -608,7 +608,7 @@ There is no watch mode, no file watcher, and no regeneration step — those belo
 
 ## Type Definitions
 
-> ✅ **`typedef` is implemented (Milestone 14 / Gate 12); `callback` is still deferred.** Standalone `// T:` declarations bind to no JavaScript AST node, so they use the parser's *node-less* extraction path — the same partition that emits `import`, `=>` return, and `// T: ignore` annotations from the comment stream before node matching. `typedef` is one more arm of that path; `callback` (its function-type cousin) follows the identical mechanism and stays deferred until its own milestone. The `typedef` projections below describe present behavior; the `callback` ones are illustrative planned syntax.
+> ✅ **`typedef` and `callback` are both implemented.** Standalone `// T:` declarations bind to no JavaScript AST node, so they use the parser's *node-less* extraction path — the same partition that emits `import`, `=>` return, and `// T: ignore` annotations from the comment stream before node matching. `typedef` and `callback` are two more arms of that path; each hoists a synthetic `@typedef`/`@callback` block plus an `export const Name = {}` to module scope. The projections below describe present behavior.
 >
 > **Reserved leading word.** After payload normalization, a `// T:` whose first word is `typedef` is a *declaration*, never a type — joining `ignore`/`i` (see [Directives](#directives)) in the reserved set. `callback` will join it when implemented.
 
@@ -638,7 +638,7 @@ export const ID = {};
 export const Status = {};
 ```
 
-The object body is emitted as an **inline object type** (`@typedef {{ … }} Name`) — exactly what `convertGenerics` already produces for an object payload. It type-checks identically to the expanded `@typedef {Object}` + `@property` form, but preserves `readonly`, nests for free, and needs no property-splitting. (`@property` expansion is a possible future formatting option for richer per-property hover.) The synthetic `export const Name = {}` makes the type resolvable across files via `// T: import`; it is **hoisted to module scope** (beside the import hoist), so a `typedef` written inside a function body still emits a legal top-level `export`.
+The object body is emitted as an **inline object type** (`@typedef {{ … }} Name`) — exactly what `convertGenerics` already produces for an object payload — *unless* a member carries a per-property `-` description, in which case ety switches to the `@typedef {Object}` + `@property` expansion (the only form that can hold per-property text; see *With a description* below). The inline form is the default because it type-checks identically, preserves `readonly`, nests for free, and needs no property-splitting. The synthetic `export const Name = {}` makes the type resolvable across files via `// T: import`; it is **hoisted to module scope** (beside the import hoist), so a `typedef` written inside a function body still emits a legal top-level `export`.
 
 **With optional and readonly properties:**
 ```javascript
@@ -655,12 +655,21 @@ export const Config = {};
 
 > The inline-object form carries `?` (optional) and `readonly` through verbatim — both are valid inside a TypeScript object type. (An earlier draft wrote `@property {string} baseUrl @readonly`, which does **not** work: text after a `@property` name is parsed as the property *description*, not a modifier, so per-property `readonly` is unavailable in the `@property` form. Inline-object emission is what makes `readonly` expressible.)
 
-**With a description** (reusing the ` - ` convention, same as `param`/`type` annotations — no separate `// T: #` continuation line):
+**With a description.** Two distinct sigils, consistent with the rest of ety (see
+[Description Syntax](#description-syntax)):
+
+- **`// T: #` — the typedef *descriptor*:** a description of the declaration as a whole, the
+  same standalone-description convention used for functions and classes.
+- **` - ` — an *individual / sub-property* description:** the same inline convention used for
+  `param`/`type`/property annotations, written after that property's type inside the body.
+
 ```javascript
-// T: typedef User = { id: string, name: string, age: number } - A registered user in the system
+// T: typedef User = { id: string, name: string, age: number }
+// T: # A registered user in the system
 ```
 
-**Generates:**
+**Generates** (the `#` descriptor becomes the leading JSDoc description line, exactly as for a
+function or class; the inline-object body is unchanged):
 ```javascript
 /**
  * A registered user in the system
@@ -669,9 +678,29 @@ export const Config = {};
 export const User = {};
 ```
 
+Per-property descriptions use the ` - ` form *inside* the object body, one per property:
+```javascript
+// T: typedef User = { id: string - unique identifier, name: string - display name }
+// T: # A registered user in the system
+```
+
+**Generates** (per-property descriptions cannot live in the inline-object `{{…}}` form, so a
+typedef that carries them projects via the `@property` expansion noted above; `@readonly` and
+per-property descriptions are therefore mutually exclusive — pick the inline-object form for
+`readonly`, the `@property` form for per-property text):
+```javascript
+/**
+ * A registered user in the system
+ * @typedef {Object} User
+ * @property {string} id - unique identifier
+ * @property {string} name - display name
+ */
+export const User = {};
+```
+
 ### Callback
 
-> ⏳ **Deferred (no milestone yet).** `callback` follows the same node-less extraction mechanism as `typedef` (Milestone 14) and will be specified when scheduled. The projections below are illustrative planned syntax, not present behavior.
+> ✅ **`callback` is implemented** (the function-type cousin of `typedef`, same node-less mechanism). The body decomposes into a `@callback` block; `{T}` type-param lists become `@template` tags, named or positional params become `@param`, and the arrow's right side becomes `@returns` (a bare param list with no `=>` implies `=> void`). A synthetic `export const Name = {}` is hoisted to module scope — required for cross-file `// T: import`, exactly as `typedef`.
 
 ```javascript
 // T: callback OnSuccess = (data: any) => void
@@ -689,8 +718,8 @@ export const User = {};
 export const OnSuccess = {};
 
 /**
- * @callback Comparator
  * @template T
+ * @callback Comparator
  * @param {T} a
  * @param {T} b
  * @returns {number}
@@ -698,15 +727,17 @@ export const OnSuccess = {};
 export const Comparator = {};
 
 /**
- * @callback Mapper
  * @template T
  * @template U
+ * @callback Mapper
  * @param {T} item
  * @param {number} index
  * @returns {U}
  */
 export const Mapper = {};
 ```
+
+> **Tag order is load-bearing:** `@template` tags must come **before** `@callback` (and before `@typedef`). TypeScript 6.0.3 reports error 8039 — *"a JSDoc `@template` tag may not follow a `@typedef`, `@callback`, or `@overload` tag"* — for the reverse order, so ety always emits the type params first.
 
 ---
 
@@ -1787,7 +1818,7 @@ Each source construct projects to JSDoc + a declaration in the virtual document 
 | `class Child extends Parent { ... }` | JSDoc block; `super()` semantics preserved from the real source |
 | `const x = value` / `let x = value` | `/** @type {…} */` above the declaration |
 | `// T: typedef Name = ...` | JSDoc `@typedef {{...}}` + a synthetic `export const Name` binding, hoisted to module scope (Milestone 14) |
-| `// T: callback Name = ...` | JSDoc `@callback` + a synthetic `const Name` binding (deferred) |
+| `// T: callback Name = ...` | JSDoc `@callback` (`@template` first) + `@param`/`@returns` + a synthetic `export const Name` binding, hoisted to module scope |
 | `const ENUM = { ... }` (with `// T: enum`) | `/** @enum {…} */` above the object (values retained) |
 | `export * from './path'` | left as-is; resolved against the real module graph |
 | `export { A, B } from './path'` | left as-is; resolved against the real module graph |
@@ -1861,17 +1892,19 @@ The setting is read at `initialize` and kept live via `workspace/didChangeConfig
 
 **Source:** `src/models/user.js`
 ```javascript
-// T: typedef User = { id: string, name: string, email: string, role: Role } - A registered user in the system
+// T: typedef User = { id: string, name: string, email: string, role: Role }
+// T: # A registered user in the system
 
-// T: typedef Role = 'admin' | 'user' | 'guest' - User permission level
+// T: typedef Role = 'admin' | 'user' | 'guest'
+// T: # User permission level
 
 // T: callback OnUserChange = (user: User, prev: User | null) => void
 // T: # Called when user data changes
 ```
 
-> ⚠️ **Current behavior:** `typedef` is [implemented](#type-definitions); `callback` is still deferred. `User` and `Role` resolve and are importable from `user-service.js` below. The `// T: callback OnUserChange` line still binds to no node and emits no annotation yet, so `OnUserChange` does not resolve — its block below is the *illustrative* shape it will take when `callback` lands.
+> **Current behavior:** `typedef` and `callback` are both [implemented](#type-definitions). `User`, `Role`, and `OnUserChange` all resolve and are importable from `user-service.js` below. (Whole-declaration descriptions via a `// T: #` line are not wired up yet; the description lines shown in the projected blocks below are the intended shape.)
 
-**Virtual document for `src/models/user.js`** (`typedef` shipped; the `callback` block is the deferred shape):
+**Virtual document for `src/models/user.js`** (`typedef` + `callback` shipped):
 ```javascript
 /**
  * A registered user in the system
@@ -1892,7 +1925,7 @@ export const Role = {};
  * @param {User | null} prev
  * @returns {void}
  */
-const OnUserChange = {};
+export const OnUserChange = {};
 ```
 
 ---
@@ -2032,7 +2065,7 @@ The following features are explicitly **not supported** in Ety v0.2:
 | Class inheritance | ✅ (with super() in stubs) |
 | Interface implementation | ✅ |
 | Typedef | ✅ (inline-object `@typedef {{…}}` + hoisted `export const`) |
-| Callback | ⏳ Planned (deferred — no milestone yet) |
+| Callback | ✅ (`@callback` block, `@template` first, + hoisted `export const`) |
 | Enum | ✅ (values retained) |
 | Type imports | ✅ (rewritten in stubs) |
 | Barrel exports | ✅ (export *, export {}) |
@@ -2063,6 +2096,11 @@ The following features are explicitly **not supported** in Ety v0.2:
 ---
 
 ## Changelog
+
+### v0.2.2
+
+- **Implemented `// T: callback`** — the function-type cousin of `typedef`, sharing the same node-less partition. The body decomposes into a `@callback` block: a leading `{T}` list becomes `@template` tags (emitted **before** `@callback` — TS 6.0.3 rejects the reverse with error 8039, confirmed by a de-risk probe), named/positional params become `@param` (positional get synthetic `pN`, optional render as `[name]`), and the arrow's right side becomes `@returns` (a bare param list implies `=> void`). A synthetic `export const Name = {}` is hoisted to module scope (required for cross-file import). No capability or client change.
+- typedef/callback bodies are now kept **verbatim** in the parser: a whole-declaration description belongs on a separate `// T: #` descriptor line (not yet wired), and a ` - ` *inside* a body is a per-property/per-param description for the transformer to render.
 
 ### v0.2.1
 
