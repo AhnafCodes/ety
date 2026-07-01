@@ -563,7 +563,7 @@ When the TypeScript Language Service reports a type error against the virtual do
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         Error Tracing Flow                               │
+│                         Error Tracing Flow                              │
 └─────────────────────────────────────────────────────────────────────────┘
 
   TS error (virtual doc)          vToO line map           Original Source
