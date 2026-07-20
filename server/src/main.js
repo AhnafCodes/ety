@@ -13,7 +13,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { parse_ety } from './parser.js';
 import { createTsService } from './tsHost.js';
-import { createState, processDocument, onHover, onCompletion, onDidClose, uriToPath } from './handlers.js';
+import { createState, processDocument, onHover, onCompletion, onDidClose, onDidChangeWatchedFiles, uriToPath } from './handlers.js';
 import { resolveScriptHosts } from './embedded.js';
 
 const connection = createConnection(ProposedFeatures.all);
@@ -31,6 +31,8 @@ connection.onInitialize(params => {
     deps.tsService = createTsService({
         virtualDocs: state.virtualDocs,
         versions: state.versions,
+        diskVersions: state.diskVersions,
+        hasInvalidatedResolutions: () => state.resolutionsStale,
         ...(rootUri ? { workspaceRoot: uriToPath(rootUri) } : {}),
     });
     return {
@@ -58,6 +60,10 @@ connection.onInitialize(params => {
 documents.onDidChangeContent(({ document }) => processDocument(state, deps, document));
 documents.onDidClose(({ document }) => onDidClose(state, deps, document));
 connection.onHover(params => onHover(state, deps, params));
+// Disk changes to CLOSED files (e.g. a regenerated .types.js) — the client's
+// synchronize.fileEvents watcher feeds these; open buffers come through
+// onDidChangeContent instead.
+connection.onDidChangeWatchedFiles(params => onDidChangeWatchedFiles(state, deps, params));
 connection.onCompletion(params => onCompletion(state, deps, params));
 
 // Live `ety.scriptHosts` changes (Milestone 13): re-read the setting and

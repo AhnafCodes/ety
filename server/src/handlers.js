@@ -7,7 +7,7 @@
 // them against the real disk — 'file:///dir/types.js' never exists there.
 // The original URI is kept inside the lineMaps entry for publishing.
 import ts from 'typescript';
-import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
+import { CompletionItemKind, InsertTextFormat, FileChangeType } from 'vscode-languageserver';
 import { fileURLToPath } from 'node:url';
 import { LineIndex, transformDocument } from './transform.js';
 import { tsCategoryToSeverity } from './tsHost.js';
@@ -81,6 +81,14 @@ export function createState() {
         virtualDocs: new Map(), // path -> virtual source string
         lineMaps: new Map(),    // path -> { vToO, oToV, lineKind, lineIndex, uri }
         versions: new Map(),    // path -> document version (TS cache invalidation)
+        // path -> disk epoch, bumped by watcher events for CLOSED files. Kept
+        // separate from `versions` (LSP-owned) so a manual bump can never
+        // collide with a later document.version and read as "unchanged";
+        // getScriptVersion composes both.
+        diskVersions: new Map(),
+        // Armed by a watched create/delete, read by the TS host's
+        // hasInvalidatedResolutions, disarmed after the next program build.
+        resolutionsStale: false,
         diagTimers: new Map(),  // path -> debounce timer for diagnostics
         // Host extensions whose `<script>` bodies ety analyzes (Milestone 13).
         // .html on by default; templates opt-in. main.js overwrites this from
@@ -163,6 +171,10 @@ export function pushDiagnostics(state, deps, path) {
         }
         located.push(d);
     }
+    // Both diagnostic calls above synchronize host data, so any resolution
+    // re-run forced by a watched create/delete has happened — disarm the flag
+    // so later syncs don't re-resolve the whole program on every build.
+    state.resolutionsStale = false;
 
     const diagnostics = located
         .map(d => {
@@ -286,6 +298,36 @@ export function onCompletion(state, deps, { textDocument, position }) {
     visit(sourceFile);
 
     return item ? [item] : [];
+}
+
+// Watched-file events (workspace/didChangeWatchedFiles) are the ONLY signal
+// that a CLOSED file changed on disk — e.g. a generator rewriting .types.js.
+// Without this, getScriptVersion pins closed files at their first read
+// forever and consuming documents type-check against a stale snapshot until
+// the file is opened or the server restarts.
+export function onDidChangeWatchedFiles(state, deps, { changes }) {
+    let touched = false;
+    for (const { uri, type } of changes ?? []) {
+        const path = uriToPath(uri);
+        // Open documents: the editor buffer is authoritative, and didChange
+        // already versions it. Bumping here would only force a pointless
+        // re-parse of the same virtual doc.
+        if (state.virtualDocs.has(path)) continue;
+        state.diskVersions.set(path, (state.diskVersions.get(path) ?? 0) + 1);
+        // Create/delete can flip a module-resolution RESULT (a previously
+        // failed import now resolves, or vice versa). A version bump cannot
+        // express that — the file wasn't in the program — so arm the
+        // resolution invalidation the TS host exposes.
+        if (type !== FileChangeType.Changed) state.resolutionsStale = true;
+        touched = true;
+    }
+    if (!touched) return;
+    // Any open document may import the changed file; re-check them all on the
+    // same debounce used for edits (events arrive in bursts on regeneration).
+    for (const path of state.lineMaps.keys()) {
+        clearTimeout(state.diagTimers.get(path));
+        state.diagTimers.set(path, setTimeout(() => pushDiagnostics(state, deps, path), DEBOUNCE_MS));
+    }
 }
 
 // Prevent unbounded growth: drop all per-document state on close, cancel any

@@ -2,8 +2,10 @@
 // synthetic state. The TS service is a stub here — TS behavior itself is
 // pinned by tshost.test.js; these tests pin the REMAPPING and lifecycle.
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { FileChangeType } from 'vscode-languageserver';
 import {
     uriToPath, createState, processDocument, pushDiagnostics, onHover, onDidClose,
+    onDidChangeWatchedFiles, DEBOUNCE_MS,
 } from '../src/handlers.js';
 import { LineIndex } from '../src/transform.js';
 import { parse_ety } from '../src/parser.js';
@@ -247,6 +249,61 @@ describe('onHover (REAL TS service — the architecture claims)', () => {
             textDocument: { uri: PATH },
             position: { line: 0, character: 20 }, // inside '// T: number'
         })).toBeNull();
+    });
+});
+
+// Milestone 14: watched-file events are the only signal that a CLOSED file
+// changed on disk (generated .types.js). These pin the epoch/flag bookkeeping;
+// the TS-side effect of each lever is characterized in tshost.test.js.
+describe('onDidChangeWatchedFiles', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('bumps the disk epoch for a closed file and reschedules open-doc diagnostics (debounced)', () => {
+        vi.useFakeTimers();
+        const state = syntheticState();
+        const deps = mockDeps([]);
+        onDidChangeWatchedFiles(state, deps, {
+            changes: [{ uri: 'file:///synthetic/types.js', type: FileChangeType.Changed }],
+        });
+        expect(state.diskVersions.get('/synthetic/types.js')).toBe(1);
+        // A plain content change cannot flip a resolution result.
+        expect(state.resolutionsStale).toBe(false);
+        expect(deps.connection.sendDiagnostics).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(deps.connection.sendDiagnostics).toHaveBeenCalledTimes(1);
+        expect(deps.connection.sendDiagnostics.mock.calls[0][0].uri).toBe(URI);
+    });
+
+    it('ignores events for OPEN documents — the editor buffer is authoritative', () => {
+        vi.useFakeTimers();
+        const state = syntheticState();
+        const deps = mockDeps([]);
+        onDidChangeWatchedFiles(state, deps, {
+            changes: [{ uri: URI, type: FileChangeType.Changed }],
+        });
+        expect(state.diskVersions.size).toBe(0);
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(deps.connection.sendDiagnostics).not.toHaveBeenCalled();
+    });
+
+    it('create/delete arms resolutionsStale; the next pushDiagnostics disarms it', () => {
+        const state = syntheticState();
+        const deps = mockDeps([]);
+        onDidChangeWatchedFiles(state, deps, {
+            changes: [{ uri: 'file:///synthetic/new.js', type: FileChangeType.Created }],
+        });
+        expect(state.resolutionsStale).toBe(true);
+        // The diagnostics pass synchronizes host data (resolution re-run
+        // included), after which keeping the flag armed would force a full
+        // re-resolve on every subsequent program build.
+        pushDiagnostics(state, deps, PATH);
+        expect(state.resolutionsStale).toBe(false);
+    });
+
+    it('missing changes array is a no-op', () => {
+        const state = syntheticState();
+        onDidChangeWatchedFiles(state, mockDeps([]), {});
+        expect(state.diskVersions.size).toBe(0);
     });
 });
 

@@ -2,7 +2,7 @@
 // pinned TypeScript version's behavior over hand-built virtual documents —
 // if one breaks on a TS bump, the pinned assumption changed, not our code.
 // The de-risk method fixture runs first (implementation-plan.md, M3 test #1).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -227,5 +227,65 @@ describe('workspaceRoot: getCurrentDirectory must follow the workspace, not the 
         } finally {
             rmSync(root, { recursive: true, force: true });
         }
+    });
+});
+
+// Milestone 14: closed-file invalidation. A dependency read through the disk
+// fallback (never opened, so never in virtualDocs) is cached at version
+// "<lsp>.<epoch>". These characterize the two levers onDidChangeWatchedFiles
+// pulls: the per-file disk epoch for content changes, and
+// hasInvalidatedResolutions for create/delete flipping a resolution RESULT.
+describe('closed-file invalidation (disk epoch + resolution staleness)', () => {
+    const MAIN = [
+        "import { VALUE } from './dep.js';",
+        '/** @type {number} */',
+        'let x = VALUE;',
+        '',
+    ].join('\n');
+    const dirs = [];
+    afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+    function diskFixture({ withDep = true, hasInvalidatedResolutions } = {}) {
+        const dir = mkdtempSync(join(tmpdir(), 'ety-disk-'));
+        dirs.push(dir);
+        const depPath = join(dir, 'dep.js');
+        if (withDep) writeFileSync(depPath, 'export const VALUE = 1;\n');
+        const mainPath = join(dir, 'main.js');
+        const diskVersions = new Map();
+        const service = createTsService({
+            virtualDocs: new Map([[mainPath, MAIN]]),
+            versions: new Map([[mainPath, 1]]),
+            diskVersions,
+            hasInvalidatedResolutions,
+            workspaceRoot: dir,
+        });
+        return { mainPath, depPath, service, diskVersions };
+    }
+
+    it('a rewritten closed dependency is STALE until its disk epoch bumps (the trap this milestone fixes)', () => {
+        const { mainPath, depPath, service, diskVersions } = diskFixture();
+        expect(service.getSemanticDiagnostics(mainPath)).toEqual([]);
+        writeFileSync(depPath, "export const VALUE = 'oops';\n");
+        // No epoch bump: program is up to date, disk never re-read.
+        expect(service.getSemanticDiagnostics(mainPath)).toEqual([]);
+        diskVersions.set(depPath, 1);
+        expect(service.getSemanticDiagnostics(mainPath).map(d => d.code)).toContain(2322);
+    });
+
+    it('a CREATED file needs hasInvalidatedResolutions — no version bump can revive a failed import', () => {
+        let stale = false;
+        const { mainPath, depPath, service } = diskFixture({
+            withDep: false,
+            hasInvalidatedResolutions: () => stale,
+        });
+        // 2307 Cannot find module './dep.js'
+        expect(service.getSemanticDiagnostics(mainPath).map(d => d.code)).toContain(2307);
+        writeFileSync(depPath, 'export const VALUE = 1;\n');
+        // The failed resolution is cached with the program; creation alone
+        // changes no version, so the error persists…
+        expect(service.getSemanticDiagnostics(mainPath).map(d => d.code)).toContain(2307);
+        // …until the resolution invalidation is armed.
+        stale = true;
+        expect(service.getSemanticDiagnostics(mainPath)).toEqual([]);
     });
 });

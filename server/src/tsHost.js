@@ -21,10 +21,24 @@ export function tsCategoryToSeverity(category) {
 // Milestone 4). process.cwd() is only a fallback — in the editor it is
 // wherever the extension host spawned the server, and TS walks up from
 // getCurrentDirectory to find node_modules/@types.
-export function createTsService({ virtualDocs, versions, workspaceRoot = process.cwd() }) {
+export function createTsService({
+    virtualDocs,
+    versions,
+    // Closed files read through the disk fallback below get a version too:
+    // watcher events (workspace/didChangeWatchedFiles) bump an epoch per
+    // path in diskVersions, which is the only way TS ever re-reads a file
+    // that is not open in the editor (e.g. a regenerated .types.js).
+    diskVersions = new Map(),
+    // Returns true while a watched create/delete is pending: a new file can
+    // satisfy a previously FAILED import, which no version bump can invalidate
+    // (the file was never in the program). TS consults this per source file
+    // during program-up-to-date checks and re-runs module resolution.
+    hasInvalidatedResolutions,
+    workspaceRoot = process.cwd(),
+}) {
     const serviceHost = {
         getScriptFileNames: () => [...virtualDocs.keys()],
-        getScriptVersion: f => (versions.get(f) ?? 0).toString(),
+        getScriptVersion: f => `${versions.get(f) ?? 0}.${diskVersions.get(f) ?? 0}`,
         getScriptSnapshot: f => {
             const virtual = virtualDocs.get(f);
             if (virtual !== undefined) return ts.ScriptSnapshot.fromString(virtual);
@@ -67,5 +81,6 @@ export function createTsService({ virtualDocs, versions, workspaceRoot = process
         directoryExists: ts.sys.directoryExists,
         getDirectories: ts.sys.getDirectories,
     };
+    if (hasInvalidatedResolutions) serviceHost.hasInvalidatedResolutions = hasInvalidatedResolutions;
     return ts.createLanguageService(serviceHost);
 }

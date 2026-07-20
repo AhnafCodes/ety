@@ -56,6 +56,13 @@ function activate() {
             // Hand the same setting to the server so client selector and server
             // projection agree on which extensions are hosts.
             initializationOptions: { scriptHosts: exts },
+            // Forward on-disk create/change/delete of JS files so the server
+            // can invalidate CLOSED files TS read via its disk fallback (the
+            // generated-.types.js workflow). VS Code's workspace watcher
+            // honors files.watcherExclude, so node_modules stays quiet.
+            synchronize: {
+                fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{js,jsx,mjs,cjs}'),
+            },
         }
     );
     client.start();
