@@ -41,12 +41,14 @@ jobs:
       # Cache the downloaded VS Code build (~256 MB) across runs so e2e doesn't
       # re-fetch it every time — the cold download is CI's flakiest step
       # (transient ECONNRESET). runTest.js also retries the download with
-      # backoff for the cold-cache case.
+      # backoff for the cold-cache case. Keyed on runTest.js's own hash (not a
+      # duplicated version string here) so bumping the pinned VSCODE_VERSION
+      # automatically busts a stale cache instead of silently reusing it.
       - name: Cache VS Code for e2e
         uses: actions/cache@v4
         with:
           path: client/.vscode-test
-          key: vscode-test-${{ runner.os }}
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('client/test/runTest.js') }}
       - run: xvfb-run -a npm run test:e2e --workspace client
 
   neovim:
