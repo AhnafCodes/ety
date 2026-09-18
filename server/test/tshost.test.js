@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { parse_ety } from '../src/parser.js';
 import { transformDocument } from '../src/transform.js';
-import { createTsService, tsCategoryToSeverity } from '../src/tsHost.js';
+import { createTsService, tsCategoryToSeverity, resolveModuleName } from '../src/tsHost.js';
+import { collectShadowDocs } from '../src/shadowDocs.js';
 
 const FILE = '/virtual/fixture.js';
 const ENGINE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../fixtures/engine');
@@ -186,11 +187,17 @@ describe('cross-file types (disk-backed fixtures, REAL parse → transform pipel
         expect(allDiags(service, TYPES)).toEqual([]);
     });
 
-    it('V1 LIMITATION: importing doc alone — closed types.js is served raw from disk, its generics vanish', () => {
-        // With types.js not in virtualDocs, getScriptSnapshot falls back to
-        // the raw disk bytes: an untransformed `class Box` with no @template,
-        // so Box<number> draws TS2315. The error lands on the INJECTED JSDoc
-        // line (Milestone 4 remaps such diagnostics onto the // T: comment).
+    it('unaided raw fallback: importing doc alone, no shadow doc supplied — closed types.js is served raw, its generics vanish', () => {
+        // createTsService in isolation does not conjure a shadow doc on its
+        // own — something (handlers.js's processDocument, in production) has
+        // to populate `shadowDocs` first. With NEITHER virtualDocs NOR
+        // shadowDocs holding an entry for types.js, getScriptSnapshot falls
+        // all the way to raw disk bytes: an untransformed `class Box` with no
+        // @template, so Box<number> draws TS2315. The error lands on the
+        // INJECTED JSDoc line (Milestone 4 remaps such diagnostics onto the
+        // // T: comment). This is the primitive createTsService still needs
+        // to fall back on; it is NOT the v1 limitation anymore — see the next
+        // test for what Milestone 15 actually changes.
         const mainVirtual = virt(MAIN);
         const virtualDocs = new Map([[MAIN, mainVirtual]]);
         const versions = new Map([[MAIN, 1]]);
@@ -199,6 +206,49 @@ describe('cross-file types (disk-backed fixtures, REAL parse → transform pipel
         expect(diags).toHaveLength(1);
         expect(diags[0].code).toBe(2315); // Type 'Box' is not generic.
         expect(mainVirtual.slice(diags[0].start, diags[0].start + diags[0].length)).toBe('Box<number>');
+    });
+
+    it('Milestone 15 / Gate 13: with a shadow doc populated for types.js, the SAME closed-import scenario now type-checks clean', () => {
+        // This is the flip of the v1 limitation above, at the exact same
+        // fixture and assertion shape: types.js is STILL never added to
+        // virtualDocs (still closed, never opened) — but collectShadowDocs
+        // (the mechanism processDocument runs on every open document, in
+        // production) has walked main.js's own // T: import and transformed
+        // types.js on read. Box<number> now resolves its @template and
+        // type-checks with ZERO diagnostics, matching the "both open" case.
+        const mainSource = readFileSync(MAIN, 'utf8');
+        const mainAnnotations = parse_ety(mainSource);
+        const shadowDocs = collectShadowDocs({
+            containingFile: MAIN,
+            importAnnotations: mainAnnotations.filter(a => a.kind === 'import'),
+            isKnown: () => false,
+            readFile: p => readFileSync(p, 'utf8'),
+            parseEty: parse_ety,
+            transformDocument,
+            resolveModuleName,
+        });
+        expect(shadowDocs.has(TYPES)).toBe(true); // sanity: the walk actually reached it
+
+        const virtualDocs = new Map([[MAIN, transformDocument(mainSource, mainAnnotations).virtualSource]]);
+        const versions = new Map([[MAIN, 1]]);
+        const service = createTsService({ virtualDocs, versions, shadowDocs });
+        expect(allDiags(service, MAIN)).toEqual([]);
+    });
+});
+
+describe('Milestone 15 / Gate 13, de-risk #1: standalone resolveModuleName matches the live LanguageService', () => {
+    it('resolves ./types.js from main.js to the same absolute path the live service resolves with both open', () => {
+        // A mismatch here would mean the shadow-doc walk (Milestone 15) could
+        // decide to transform a DIFFERENT file than the one TypeScript itself
+        // ends up reading for the same // T: import — silently wrong types.
+        const MAIN = join(ENGINE_DIR, 'main.js');
+        const TYPES = join(ENGINE_DIR, 'types.js');
+        expect(resolveModuleName('./types.js', MAIN)).toBe(TYPES);
+    });
+
+    it('returns null for a specifier TypeScript itself cannot resolve', () => {
+        const MAIN = join(ENGINE_DIR, 'main.js');
+        expect(resolveModuleName('./does-not-exist.js', MAIN)).toBeNull();
     });
 });
 

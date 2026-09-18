@@ -32,6 +32,7 @@ connection.onInitialize(params => {
         virtualDocs: state.virtualDocs,
         versions: state.versions,
         diskVersions: state.diskVersions,
+        shadowDocs: state.shadowDocs,
         hasInvalidatedResolutions: () => state.resolutionsStale,
         ...(rootUri ? { workspaceRoot: uriToPath(rootUri) } : {}),
     });

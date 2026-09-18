@@ -10,8 +10,9 @@ import ts from 'typescript';
 import { CompletionItemKind, InsertTextFormat, FileChangeType } from 'vscode-languageserver';
 import { fileURLToPath } from 'node:url';
 import { LineIndex, transformDocument } from './transform.js';
-import { tsCategoryToSeverity } from './tsHost.js';
+import { tsCategoryToSeverity, resolveModuleName } from './tsHost.js';
 import { detectScriptHost, extractScriptProjection, hostScriptPath } from './embedded.js';
+import { collectShadowDocs } from './shadowDocs.js';
 
 export const DEBOUNCE_MS = 200;
 
@@ -89,6 +90,16 @@ export function createState() {
         // Armed by a watched create/delete, read by the TS host's
         // hasInvalidatedResolutions, disarmed after the next program build.
         resolutionsStale: false,
+        // Milestone 15 — path -> transformed virtual source for a CLOSED file
+        // an open document's own `// T: import` reached (transform-on-read).
+        // Keyed and versioned exactly like a raw-disk-fallback file
+        // (diskVersions), but the VALUE getScriptSnapshot returns for it is
+        // the parsed+transformed source, not raw bytes.
+        shadowDocs: new Map(),
+        // Milestone 15 — path -> that OPEN document's own kind === 'import'
+        // annotations, retained so a later watched-file change can re-walk
+        // the import graph without re-parsing the importing document itself.
+        importAnnotations: new Map(),
         diagTimers: new Map(),  // path -> debounce timer for diagnostics
         // Host extensions whose `<script>` bodies ety analyzes (Milestone 13).
         // .html on by default; templates opt-in. main.js overwrites this from
@@ -107,6 +118,37 @@ function resolvePath(state, uri) {
     return detectScriptHost(uri, state.scriptHosts) ? hostScriptPath(path) : path;
 }
 
+// Milestone 15 / Gate 13 — walk `importAnnotations` (one document's own
+// kind === 'import' annotations) and merge any newly-discovered shadow docs
+// into state. Shares collectShadowDocs' pure algorithm across both call
+// sites (processDocument and onDidChangeWatchedFiles) so the "resolve, skip
+// if known, transform, recurse" logic lives in exactly one place. Wrapped in
+// its own try/catch: a malformed CLOSED file (parse_ety panicking on garbage
+// three imports deep) must not take down the OPEN document's own diagnostics
+// — that document's state is already committed by the time this runs.
+function collectAndMergeShadowDocs(state, deps, containingFile, importAnnotations) {
+    if (importAnnotations.length === 0) return;
+    try {
+        const shadows = collectShadowDocs({
+            containingFile,
+            importAnnotations,
+            isKnown: p => state.virtualDocs.has(p) || state.shadowDocs.has(p),
+            readFile: ts.sys.readFile,
+            parseEty: deps.parse_ety,
+            transformDocument,
+            resolveModuleName,
+        });
+        for (const [shadowPath, virtualSource] of shadows) {
+            state.shadowDocs.set(shadowPath, virtualSource);
+            // Reuses the disk-epoch field a raw-fallback file already gets
+            // bumped on: getScriptVersion needs no Milestone-15-specific change.
+            state.diskVersions.set(shadowPath, (state.diskVersions.get(shadowPath) ?? 0) + 1);
+        }
+    } catch (err) {
+        deps.connection.console.error(`ety: shadow-doc walk from ${containingFile} failed: ${err.stack ?? err}`);
+    }
+}
+
 // Parse + transform synchronously (cheap; hover always has fresh maps), then
 // debounce the expensive TS check. A parse_ety throw (malformed addon input,
 // future Rust panic surfaced as a JS error) must NOT wipe document state:
@@ -114,6 +156,7 @@ function resolvePath(state, uri) {
 // last good parse. Stale-but-working beats dead.
 export function processDocument(state, deps, document) {
     const path = resolvePath(state, document.uri);
+    let importAnnotations;
     try {
         // Host documents (.html, configured templates) are pre-projected to a
         // line- and column-parallel JS buffer; the parser, transformer, TS host,
@@ -122,7 +165,8 @@ export function processDocument(state, deps, document) {
         const source = hostKind
             ? extractScriptProjection(document.getText(), hostKind).jsSource
             : document.getText();
-        const { virtualSource, vToO, oToV, lineKind, ignoredLines } = transformDocument(source, deps.parse_ety(source));
+        const annotations = deps.parse_ety(source);
+        const { virtualSource, vToO, oToV, lineKind, ignoredLines } = transformDocument(source, annotations);
         state.virtualDocs.set(path, virtualSource);
         state.lineMaps.set(path, {
             vToO, oToV, lineKind, ignoredLines,
@@ -132,10 +176,18 @@ export function processDocument(state, deps, document) {
         // document.version is LSP-maintained (didOpen: 1, then increments) —
         // distinct per content, which is all getScriptVersion needs.
         state.versions.set(path, document.version ?? (state.versions.get(path) ?? 0) + 1);
+        // Milestone 15 — retained so a later watched-file change can re-walk
+        // this document's import graph without re-parsing the document itself.
+        importAnnotations = annotations.filter(a => a.kind === 'import');
+        state.importAnnotations.set(path, importAnnotations);
     } catch (err) {
         deps.connection.console.error(`ety: keeping last good state for ${document.uri}: ${err.stack ?? err}`);
         return; // no publish either — diagnostics would describe the stale doc
     }
+    // Transform-on-read: pull in any closed file this document's own // T:
+    // import lines reach, so their // T: types resolve without opening them.
+    collectAndMergeShadowDocs(state, deps, path, importAnnotations);
+
     clearTimeout(state.diagTimers.get(path));
     state.diagTimers.set(path, setTimeout(() => pushDiagnostics(state, deps, path), DEBOUNCE_MS));
 }
@@ -319,9 +371,20 @@ export function onDidChangeWatchedFiles(state, deps, { changes }) {
         // express that — the file wasn't in the program — so arm the
         // resolution invalidation the TS host exposes.
         if (type !== FileChangeType.Changed) state.resolutionsStale = true;
+        // Milestone 15: a changed path's cached shadow content, if any, is now
+        // stale. The epoch bump above only helps if the VALUE getScriptSnapshot
+        // returns actually changes — drop the entry so it does, and let the
+        // re-walk below (same cycle) or a future one repopulate it fresh.
+        state.shadowDocs.delete(path);
         touched = true;
     }
     if (!touched) return;
+    // Re-walk every open document's own // T: import list immediately, so a
+    // shadow entry dropped above is restored within THIS debounce cycle if any
+    // open document still imports it — not only on that document's next edit.
+    for (const [path, importAnnotations] of state.importAnnotations) {
+        collectAndMergeShadowDocs(state, deps, path, importAnnotations);
+    }
     // Any open document may import the changed file; re-check them all on the
     // same debounce used for edits (events arrive in bursts on regeneration).
     for (const path of state.lineMaps.keys()) {
@@ -339,5 +402,11 @@ export function onDidClose(state, deps, document) {
     state.virtualDocs.delete(path);
     state.lineMaps.delete(path);
     state.versions.delete(path);
+    // Milestone 15: stop re-walking a closed document's import graph on future
+    // watched-file events. Any shadow docs it alone was responsible for are
+    // left in place rather than pruned here — see implementation-plan.md M15
+    // "Issues, recorded" (accepted v1 scope: unbounded growth, documented
+    // follow-up is reachability-based pruning).
+    state.importAnnotations.delete(path);
     deps.connection.sendDiagnostics({ uri: document.uri, diagnostics: [] });
 }

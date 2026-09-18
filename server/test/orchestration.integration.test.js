@@ -3,9 +3,15 @@
 // TS service over the shared state maps; only the connection and the clock
 // are fake. The unit tests prove the parts — this proves the composition.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { FileChangeType } from 'vscode-languageserver';
 import { parse_ety } from '../src/parser.js';
 import { createTsService } from '../src/tsHost.js';
-import { createState, processDocument, DEBOUNCE_MS } from '../src/handlers.js';
+import {
+    createState, processDocument, onDidChangeWatchedFiles, DEBOUNCE_MS,
+} from '../src/handlers.js';
 
 const PATH = '/virtual/orchestrated.js';
 
@@ -87,5 +93,119 @@ describe('onDidChangeContent orchestration', () => {
             end: { line: 4, character: 5 },
         });
         expect(diagnostics[0].message).toMatch(/not assignable to type 'number'/);
+    });
+});
+
+describe('Milestone 15 / Gate 13: transform-on-read for closed, imported files (real disk, real pipeline)', () => {
+    let root;
+    beforeEach(() => {
+        vi.useFakeTimers();
+        root = mkdtempSync(join(tmpdir(), 'ety-shadow-'));
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+        rmSync(root, { recursive: true, force: true });
+    });
+
+    const makeDeps = state => {
+        const deps = {
+            connection: { sendDiagnostics: vi.fn(), console: { error: vi.fn(), warn: vi.fn() } },
+            parse_ety,
+        };
+        deps.tsService = createTsService({
+            virtualDocs: state.virtualDocs,
+            versions: state.versions,
+            diskVersions: state.diskVersions,
+            shadowDocs: state.shadowDocs,
+            hasInvalidatedResolutions: () => state.resolutionsStale,
+        });
+        return deps;
+    };
+
+    it("opening ONLY main.js resolves types.js's generic class without ever opening it", () => {
+        const MAIN = join(root, 'main.js');
+        const TYPES = join(root, 'types.js');
+        writeFileSync(MAIN, "// T: import { Box } from './types.js'\nlet b = null; // T: Box{number} | null\n");
+        writeFileSync(TYPES, 'export class Box {\n// T: {T}\n    value; // T: T\n}\n');
+
+        const state = createState();
+        const deps = makeDeps(state);
+        processDocument(state, deps, { uri: MAIN, version: 1, getText: () => readFileSync(MAIN, 'utf8') });
+
+        expect(state.shadowDocs.has(TYPES)).toBe(true);  // the import walk reached it
+        expect(state.virtualDocs.has(TYPES)).toBe(false); // still never opened
+
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(deps.connection.sendDiagnostics).toHaveBeenCalledTimes(1);
+        expect(deps.connection.sendDiagnostics.mock.calls[0][0].diagnostics).toEqual([]);
+    });
+
+    it('a genuine error inside the shadow-transformed closed file never gets its own sendDiagnostics call', () => {
+        const MAIN = join(root, 'main.js');
+        const TYPES = join(root, 'types.js');
+        writeFileSync(MAIN, "// T: import { Box } from './types.js'\nlet b = null; // T: Box{number} | null\n");
+        // types.js carries its OWN genuine, unrelated type error.
+        writeFileSync(TYPES, 'export class Box {\n// T: {T}\n    value; // T: T\n}\nlet bad = 1; // T: string\n');
+
+        const state = createState();
+        const deps = makeDeps(state);
+        processDocument(state, deps, { uri: MAIN, version: 1, getText: () => readFileSync(MAIN, 'utf8') });
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+
+        // Exactly one publish — for MAIN, and clean — even though TYPES has a
+        // real error of its own: a shadow doc informs how MAIN type-checks; it
+        // never gets diagnostics pushed for its own (never-opened) URI.
+        expect(deps.connection.sendDiagnostics).toHaveBeenCalledTimes(1);
+        expect(deps.connection.sendDiagnostics.mock.calls[0][0].uri).toBe(MAIN);
+        expect(deps.connection.sendDiagnostics.mock.calls[0][0].diagnostics).toEqual([]);
+    });
+
+    it('a watched change to an already-considered closed file is picked up within the SAME cycle, no re-edit of main.js needed', () => {
+        const MAIN = join(root, 'main.js');
+        const TYPES = join(root, 'types.js');
+        writeFileSync(MAIN, "// T: import { Box } from './types.js'\nlet b = null; // T: Box{number} | null\n");
+        // No // T: annotations at all yet — zero annotations means no shadow
+        // is created (scope test, reused here): raw disk fallback applies,
+        // reproducing the pre-Milestone-15 "not generic" failure on purpose.
+        writeFileSync(TYPES, 'export class Box {\n    value;\n}\n');
+
+        const state = createState();
+        const deps = makeDeps(state);
+        processDocument(state, deps, { uri: MAIN, version: 1, getText: () => readFileSync(MAIN, 'utf8') });
+        expect(state.shadowDocs.has(TYPES)).toBe(false);
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(deps.connection.sendDiagnostics.mock.calls[0][0].diagnostics.length).toBeGreaterThan(0);
+
+        // types.js gains a // T: {T} generic annotation on disk, STILL closed;
+        // only a watcher event fires — main.js itself is never touched again.
+        writeFileSync(TYPES, 'export class Box {\n// T: {T}\n    value; // T: T\n}\n');
+        onDidChangeWatchedFiles(state, deps, { changes: [{ uri: TYPES, type: FileChangeType.Changed }] });
+        expect(state.shadowDocs.has(TYPES)).toBe(true); // re-walked synchronously, same handler call
+
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        const last = deps.connection.sendDiagnostics.mock.calls.at(-1)[0];
+        expect(last.diagnostics).toEqual([]);
+    });
+
+    it('an open buffer for the closed file always wins over its own shadow copy', () => {
+        const MAIN = join(root, 'main.js');
+        const TYPES = join(root, 'types.js');
+        writeFileSync(MAIN, "// T: import { Box } from './types.js'\nlet b = null; // T: Box{number} | null\n");
+        writeFileSync(TYPES, 'export class Box {\n// T: {T}\n    value; // T: T\n}\n');
+
+        const state = createState();
+        const deps = makeDeps(state);
+        processDocument(state, deps, { uri: MAIN, version: 1, getText: () => readFileSync(MAIN, 'utf8') });
+        expect(state.shadowDocs.has(TYPES)).toBe(true);
+
+        // The user now opens types.js directly with a live, UNSAVED edit that
+        // introduces its own deliberate error — the live buffer must win over
+        // the shadow's disk-backed copy.
+        const liveTypes = 'export class Box {\n// T: {T}\n    value; // T: T\n}\nlet mismatch = 1; // T: string\n';
+        processDocument(state, deps, { uri: TYPES, version: 1, getText: () => liveTypes });
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+
+        const typesPublish = deps.connection.sendDiagnostics.mock.calls.find(c => c[0].uri === TYPES)[0];
+        expect(typesPublish.diagnostics.length).toBeGreaterThan(0); // the LIVE buffer's own error surfaces
     });
 });
