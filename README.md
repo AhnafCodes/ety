@@ -24,7 +24,7 @@ Ety is inspired from Python's Type Comments, a Hidden GEM(first form of hinting 
 
 <img width="1024" height="559" alt="678063c1-d592-4167-8f12-d535e262b136" src="https://github.com/user-attachments/assets/cffad46b-c416-4dc5-8f56-4e85894b2cb3" />
 
-With it in a Variable Declarition statement  Name & Value are in the focus and Type are secondary(in the METALANE i.e. // T comments). Un-Cluttered and Less Verbose. 
+With it in a Variable Declaration statement  Name & Value are in the focus and Type are secondary(in the METALANE i.e. // T comments). Un-Cluttered and Less Verbose. 
 
 
 ## How it works
