@@ -72,6 +72,14 @@ check('init_options.scriptHosts defaults to { html }',
     and vim.deep_equal(cfg.init_options.scriptHosts, { 'html' }),
   vim.inspect(cfg.init_options))
 
+-- 5b. The auto-annotate quick fix defaults to on, and opts.auto_annotate =
+--     false turns it off.
+check('init_options.autoAnnotate defaults to true',
+  cfg.init_options.autoAnnotate == true, vim.inspect(cfg.init_options))
+local off = ety.config({ node = 'node', auto_annotate = false })
+check('auto_annotate = false turns init_options.autoAnnotate off',
+  off.init_options.autoAnnotate == false, vim.inspect(off.init_options))
+
 -- 6. Opting a template format in widens both the filetypes and scriptHosts,
 --    normalized (dot-stripped, lowercased, de-duped).
 local opted = ety.config({ node = 'node', script_hosts = { 'html', '.TPL', 'tpl' } })

@@ -27,6 +27,11 @@
           "items": { "type": "string" },
           "default": ["html"],
           "markdownDescription": "File extensions whose `<script>` blocks ety analyzes. `.html` works by default; add server-side template formats like `jsp`, `aspx`, `tpl`, `ftl` to enable type-checking of their `<script>` JavaScript. **Reload the window after changing** (the document selector is fixed per session)."
+        },
+        "ety.autoAnnotate": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer a Quick Fix (lightbulb) to insert the inferred `// T:` type comment on an un-annotated `let`/`const`/`var` declaration, e.g. `Insert // T: number` on `let i = 0;`. Only offered for the same closed set of types completion already suggests inside `// T:`. Set to `false` to turn this suggestion off."
         }
       }
     }

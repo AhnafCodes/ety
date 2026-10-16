@@ -49,6 +49,16 @@ function M.filetypes(opts)
   return fts
 end
 
+-- The auto-annotate quick fix ("Insert // T: <type>" on an un-annotated
+-- variable declaration): on by default, same as the VS Code client's
+-- ety.autoAnnotate setting and the JetBrains client's autoAnnotate(). Pass
+-- opts.auto_annotate = false to turn it off; anything else (including unset)
+-- keeps it on.
+function M.auto_annotate(opts)
+  opts = opts or {}
+  return opts.auto_annotate ~= false
+end
+
 -- Resolve a Node executable. The editor is not a Node process, so PATH is not
 -- guaranteed inside it. Order: explicit opt -> ETY_NODE -> PATH -> bare name.
 -- The bare-name fallback lets the spawn surface a clear "node not found" rather
@@ -117,8 +127,9 @@ function M.config(opts)
     filetypes = M.filetypes(opts),
     root_markers = M.root_markers,
     -- Sent verbatim as the LSP `initializationOptions`, so the server projects
-    -- the same extensions' <script> blocks the client attaches to.
-    init_options = { scriptHosts = M.script_hosts(opts) },
+    -- the same extensions' <script> blocks the client attaches to, and knows
+    -- whether to offer the auto-annotate quick fix.
+    init_options = { scriptHosts = M.script_hosts(opts), autoAnnotate = M.auto_annotate(opts) },
   }
 end
 

@@ -54,8 +54,13 @@ function activate() {
                 ...hostDocs,
             ],
             // Hand the same setting to the server so client selector and server
-            // projection agree on which extensions are hosts.
-            initializationOptions: { scriptHosts: exts },
+            // projection agree on which extensions are hosts. autoAnnotate (the
+            // "Insert // T: <type>" quick fix) rides along the same channel; on
+            // by default, no document-selector implications so no reload caveat.
+            initializationOptions: {
+                scriptHosts: exts,
+                autoAnnotate: vscode.workspace.getConfiguration('ety').get('autoAnnotate', true),
+            },
             // Forward on-disk create/change/delete of JS files so the server
             // can invalidate CLOSED files TS read via its disk fallback (the
             // generated-.types.js workflow). VS Code's workspace watcher

@@ -41,6 +41,11 @@ class EtyLspServerDescriptorTest : BasePlatformTestCase() {
         assertEquals("html", hosts[0].asString)
     }
 
+    fun `test passes autoAnnotate to the server as initializationOptions, on by default`() {
+        val opts = descriptor().createInitializationOptions() as JsonObject
+        assertTrue("autoAnnotate must default to true", opts.get("autoAnnotate").asBoolean)
+    }
+
     fun `test launches node on the server entry point over stdio`() {
         val cmd = descriptor().createCommandLine()
 

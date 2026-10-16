@@ -7,9 +7,9 @@
 // them against the real disk — 'file:///dir/types.js' never exists there.
 // The original URI is kept inside the lineMaps entry for publishing.
 import ts from 'typescript';
-import { CompletionItemKind, InsertTextFormat, FileChangeType } from 'vscode-languageserver';
+import { CodeActionKind, CompletionItemKind, InsertTextFormat, FileChangeType } from 'vscode-languageserver';
 import { fileURLToPath } from 'node:url';
-import { LineIndex, transformDocument } from './transform.js';
+import { LineIndex, hasTrailingLineComment, transformDocument } from './transform.js';
 import { tsCategoryToSeverity, resolveModuleName } from './tsHost.js';
 import { detectScriptHost, extractScriptProjection, hostScriptPath } from './embedded.js';
 import { collectShadowDocs } from './shadowDocs.js';
@@ -106,6 +106,10 @@ export function createState() {
         // the `ety.scriptHosts` setting; default kept here so unit tests and a
         // configuration-less client still get .html.
         scriptHosts: ['html'],
+        // Auto-annotate quick fix: on by default. main.js overwrites this from
+        // the `ety.autoAnnotate` setting; default kept here so unit tests and a
+        // configuration-less client still get the suggestion.
+        autoAnnotate: true,
     };
 }
 
@@ -166,10 +170,10 @@ export function processDocument(state, deps, document) {
             ? extractScriptProjection(document.getText(), hostKind).jsSource
             : document.getText();
         const annotations = deps.parse_ety(source);
-        const { virtualSource, vToO, oToV, lineKind, ignoredLines } = transformDocument(source, annotations);
+        const { virtualSource, vToO, oToV, lineKind, ignoredLines, annotatedLines } = transformDocument(source, annotations);
         state.virtualDocs.set(path, virtualSource);
         state.lineMaps.set(path, {
-            vToO, oToV, lineKind, ignoredLines,
+            vToO, oToV, lineKind, ignoredLines, annotatedLines,
             lineIndex: new LineIndex(virtualSource),
             uri: document.uri,
         });
@@ -350,6 +354,97 @@ export function onCompletion(state, deps, { textDocument, position }) {
     visit(sourceFile);
 
     return item ? [item] : [];
+}
+
+// Code actions arrive in ORIGINAL coordinates (params.range). We offer exactly
+// one kind of quick fix: "Insert // T: <type>" on an un-annotated `let`/`const`/
+// `var` declaration whose initializer infers to a type in the same closed set
+// onCompletion already uses — this stays the same deliberate sliver, just
+// offered proactively instead of only after the user has typed `// T:`
+// themselves. On by default; `ety.autoAnnotate: false` turns it off entirely.
+export function onCodeAction(state, deps, { textDocument, range }) {
+    if (!state.autoAnnotate) return [];
+    const path = resolvePath(state, textDocument.uri);
+    const entry = state.lineMaps.get(path);
+    if (!entry) return []; // not yet processed, or closed (race guard)
+    const { oToV, lineIndex, uri } = entry;
+    const ignoredLines = entry.ignoredLines ?? new Set();
+    const annotatedLines = entry.annotatedLines ?? new Set();
+
+    // Stubbed services in unit tests don't expose getProgram; only the real TS
+    // host can answer inference, which is exactly what this feature needs.
+    const program = deps.tsService.getProgram?.();
+    const sourceFile = program?.getSourceFile(path);
+    if (!sourceFile) return [];
+    const checker = program.getTypeChecker();
+
+    // Needed to read the real line's text (to insert at its end, and to guard
+    // against a line that already carries a trailing comment of some kind).
+    const document = deps.documents?.get(textDocument.uri);
+    if (!document) return [];
+
+    const actions = [];
+    for (let originalLine = range.start.line; originalLine <= range.end.line; originalLine++) {
+        if (annotatedLines.has(originalLine) || ignoredLines.has(originalLine)) continue;
+        const virtualLine = oToV.get(originalLine);
+        if (virtualLine === undefined) continue; // an injected line has no original code to annotate
+
+        const lineStart = lineIndex.getOffset(virtualLine, 0);
+        const nextStart = lineIndex.lineStarts[virtualLine + 1];
+        const lineEnd = nextStart ?? Number.MAX_SAFE_INTEGER;
+
+        // A VariableStatement (`let`/`const`/`var ...;`) whose declaration list
+        // starts on this virtual line, with exactly one declarator. Multi-
+        // declarator lines (`let x = 1, y = 2;`) are skipped — the annotation
+        // covers the whole statement, so which declarator's type it should
+        // describe is ambiguous; manual annotation stays the way to cover those.
+        // A for-loop's `let i = 0` is NOT a VariableStatement (its declaration
+        // list hangs directly off the ForStatement), so loop headers are
+        // excluded too — intentionally out of scope for this quick fix.
+        let decl = null;
+        const visit = node => {
+            if (ts.isVariableStatement(node)) {
+                const list = node.declarationList;
+                const listStart = list.getStart(sourceFile);
+                if (listStart >= lineStart && listStart < lineEnd && list.declarations.length === 1) {
+                    const only = list.declarations[0];
+                    if (only.initializer) decl = only;
+                }
+                return;
+            }
+            return ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+        if (!decl) continue;
+
+        const rawLineText = document.getText({
+            start: { line: originalLine, character: 0 },
+            end: { line: originalLine, character: Number.MAX_SAFE_INTEGER },
+        });
+        const lineText = rawLineText.replace(/\r?\n$/, '');
+        // Appending `// T: <type>` after an EXISTING trailing comment of any
+        // kind would land inside that comment's own text (the Rust extractor
+        // reads a whole line comment as one span) and never be recognized as
+        // a type annotation — so skip rather than produce a silently broken
+        // insertion the user would have to notice and fix themselves.
+        if (hasTrailingLineComment(lineText)) continue;
+
+        const type = checker.getBaseTypeOfLiteralType(checker.getTypeAtLocation(decl.initializer));
+        const item = inferEtyCompletion(type, decl.initializer, checker);
+        if (!item) continue;
+
+        const insertAt = { line: originalLine, character: lineText.length };
+        actions.push({
+            title: `Insert // T: ${item.label}`,
+            kind: CodeActionKind.QuickFix,
+            edit: {
+                changes: {
+                    [uri]: [{ range: { start: insertAt, end: insertAt }, newText: ` // T: ${item.label}` }],
+                },
+            },
+        });
+    }
+    return actions;
 }
 
 // Watched-file events (workspace/didChangeWatchedFiles) are the ONLY signal

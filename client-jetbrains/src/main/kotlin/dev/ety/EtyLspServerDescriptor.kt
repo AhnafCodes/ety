@@ -23,15 +23,20 @@ class EtyLspServerDescriptor(project: Project) :
     override fun isSupportedFile(file: VirtualFile): Boolean = isEtyFile(file)
 
     /**
-     * Hand the host extensions to the server as `initializationOptions`
-     * (Milestone 13), the same `ety.scriptHosts` list the VS Code client passes.
-     * The server projects those files' `<script>` blocks to line/column-parallel
-     * JS; client and server must agree on the set, so both read it from here /
-     * the setting.
+     * Hand the host extensions and the auto-annotate flag to the server as
+     * `initializationOptions`, mirroring what the VS Code client passes.
+     * scriptHosts (Milestone 13): the server projects those files' `<script>`
+     * blocks to line/column-parallel JS; client and server must agree on the
+     * set, so both read it from here / the setting. autoAnnotate: on by
+     * default, the "Insert // T: <type>" quick fix; ETY_AUTO_ANNOTATE opts it
+     * off, same override style as ETY_SCRIPT_HOSTS.
      */
     override fun createInitializationOptions(): Any {
         val hosts = JsonArray().apply { scriptHosts().forEach { add(it) } }
-        return JsonObject().apply { add("scriptHosts", hosts) }
+        return JsonObject().apply {
+            add("scriptHosts", hosts)
+            addProperty("autoAnnotate", autoAnnotate())
+        }
     }
 
     override fun createCommandLine(): GeneralCommandLine {

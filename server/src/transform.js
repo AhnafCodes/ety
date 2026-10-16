@@ -121,6 +121,24 @@ export function convertGenerics(input) {
     return out;
 }
 
+// True iff `lineText` contains a `//` outside any string literal — i.e. the
+// line already carries a trailing comment of ANY kind, not just `// T:`.
+// Used to guard the auto-annotate quick fix: appending `// T: <type>` after
+// an existing comment would land inside that comment's own span (the Rust
+// extractor treats a whole line comment as one text run), so the inserted
+// annotation would never be recognized. Reuses the shared `scan` tokenizer
+// so a `//` inside a string literal is correctly skipped. Known gap: `scan`
+// has no regex-literal awareness, so an escaped `\/\/` inside a regex (e.g.
+// `/a\/\/b/`) can false-positive — the failure mode is only a missed quick
+// fix on that one line, never a bad insertion, so this is an accepted
+// trade-off rather than a full regex-aware tokenizer.
+export function hasTrailingLineComment(lineText) {
+    for (const t of scan(lineText)) {
+        if (t.type === 'char' && t.c === '/' && lineText[t.i + 1] === '/') return true;
+    }
+    return false;
+}
+
 // Split on top-level commas only — ignores nested (), [], <>, {}, and strings.
 // Runs after convertGenerics, so <> are generic delimiters; '=>' is skipped
 // so its '>' doesn't unbalance the depth counter.
@@ -522,6 +540,15 @@ export function transformDocument(source, annotations) {
         withLines.filter(a => a.kind === 'ignore'),
         totalOriginalLines,
     );
+
+    // The original lines that already carry a 'variable' annotation — used by
+    // the auto-annotate quick fix (handlers.js: onCodeAction) to skip offering
+    // a suggestion where one already exists. Scoped to 'variable' only: that
+    // is the one kind the quick fix ever offers (Rule 1, trailing `let`/`const`
+    // annotations), so function/class/property annotations are irrelevant here.
+    const annotatedLines = new Set(
+        withLines.filter(a => a.kind === 'variable').map(a => a.originalLine),
+    );
     // `// T: typedef` and `// T: callback` are standalone declarations, not
     // node-bound types — each is hoisted as its own synthetic block (below), so
     // keep them out of the import and type streams (their bodies are not
@@ -731,5 +758,6 @@ export function transformDocument(source, annotations) {
         oToV,
         lineKind,
         ignoredLines,
+        annotatedLines,
     };
 }

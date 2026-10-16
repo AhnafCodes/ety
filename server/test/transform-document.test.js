@@ -162,6 +162,18 @@ describe('transformDocument invariants', () => {
         expect([...ignoredLines].sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
     });
 
+    it('records a variable annotation\'s line in annotatedLines (auto-annotate guard)', () => {
+        const source = 'let count = 0; // T: number\nlet other = 1;\n';
+        const { annotatedLines } = transform(source);
+        expect([...annotatedLines]).toEqual([0]);
+    });
+
+    it('annotatedLines is scoped to kind "variable" — a function annotation does not count', () => {
+        const source = 'function f() {\n// T: () => void\n    return;\n}\n';
+        const { annotatedLines } = transform(source);
+        expect([...annotatedLines]).toEqual([]);
+    });
+
     it('a source with no annotations passes through untouched', () => {
         const source = 'const plain = 1;\nfunction f() { return 2; }\n';
         const { virtualSource, vToO, oToV } = transform(source);

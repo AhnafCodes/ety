@@ -9,17 +9,21 @@ import {
     TextDocuments,
     ProposedFeatures,
     TextDocumentSyncKind,
+    CodeActionKind,
 } from 'vscode-languageserver/node.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { parse_ety } from './parser.js';
 import { createTsService } from './tsHost.js';
-import { createState, processDocument, onHover, onCompletion, onDidClose, onDidChangeWatchedFiles, uriToPath } from './handlers.js';
+import {
+    createState, processDocument, onHover, onCompletion, onCodeAction, onDidClose,
+    onDidChangeWatchedFiles, uriToPath,
+} from './handlers.js';
 import { resolveScriptHosts } from './embedded.js';
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 const state = createState();
-const deps = { connection, parse_ety, tsService: null };
+const deps = { connection, parse_ety, tsService: null, documents };
 
 connection.onInitialize(params => {
     // Milestone 13: the host extensions whose `<script>` bodies ety analyzes.
@@ -27,6 +31,10 @@ connection.onInitialize(params => {
     // (synchronous, no capability negotiation); onDidChangeConfiguration keeps it
     // live. resolveScriptHosts defaults it to ['html'].
     state.scriptHosts = resolveScriptHosts(params.initializationOptions?.scriptHosts);
+    // The auto-annotate quick fix (Insert // T: <type> on an un-annotated
+    // variable declaration): on by default, off via `ety.autoAnnotate: false`.
+    // Kept live by onDidChangeConfiguration below, same as scriptHosts.
+    state.autoAnnotate = params.initializationOptions?.autoAnnotate ?? true;
     const rootUri = params.workspaceFolders?.[0]?.uri ?? params.rootUri;
     deps.tsService = createTsService({
         virtualDocs: state.virtualDocs,
@@ -49,6 +57,9 @@ connection.onInitialize(params => {
             // spoofing into the JSDoc block; this one reads an already-inferred
             // type and returns a whole token.
             completionProvider: { triggerCharacters: [':'] },
+            // The auto-annotate quick fix (onCodeAction): a lightbulb offering
+            // "Insert // T: <type>" on an un-annotated variable declaration.
+            codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
             //
             // diagnosticsProvider is NOT declared either: diagnostics use the
             // push model via connection.sendDiagnostics.
@@ -66,6 +77,7 @@ connection.onHover(params => onHover(state, deps, params));
 // onDidChangeContent instead.
 connection.onDidChangeWatchedFiles(params => onDidChangeWatchedFiles(state, deps, params));
 connection.onCompletion(params => onCompletion(state, deps, params));
+connection.onCodeAction(params => onCodeAction(state, deps, params));
 
 // Live `ety.scriptHosts` changes (Milestone 13): re-read the setting and
 // re-project every open document so a newly-enabled host takes effect. The
@@ -74,6 +86,9 @@ connection.onCompletion(params => onCompletion(state, deps, params));
 connection.onDidChangeConfiguration(change => {
     state.scriptHosts = resolveScriptHosts(change?.settings?.ety?.scriptHosts);
     for (const document of documents.all()) processDocument(state, deps, document);
+    // Live `ety.autoAnnotate` changes: code actions are computed fresh per
+    // request, so no re-projection is needed — just update the flag.
+    state.autoAnnotate = change?.settings?.ety?.autoAnnotate ?? true;
 });
 
 documents.listen(connection);

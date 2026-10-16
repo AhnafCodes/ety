@@ -44,3 +44,16 @@ internal fun scriptHosts(): List<String> {
         .distinct()
     return cleaned.ifEmpty { listOf("html") }
 }
+
+/**
+ * The auto-annotate quick fix ("Insert // T: <type>" on an un-annotated
+ * variable declaration): on by default, same as the VS Code client's
+ * `ety.autoAnnotate` setting. `ETY_AUTO_ANNOTATE` (mirroring `ETY_SCRIPT_HOSTS`'s
+ * override style) opts it off when set to exactly `false` or `0`; any other
+ * value, including unset, keeps it on. A full Settings UI is a documented
+ * follow-up, same as scriptHosts().
+ */
+internal fun autoAnnotate(): Boolean {
+    val raw = System.getenv("ETY_AUTO_ANNOTATE")?.trim()?.lowercase()
+    return raw != "false" && raw != "0"
+}

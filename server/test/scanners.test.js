@@ -3,7 +3,7 @@
 // section, plus the two regression cases the plan calls out by name:
 // the #9 space rule and the all-bracket-kinds constraint case.
 import { describe, it, expect } from 'vitest';
-import { convertGenerics, splitTopLevel, extractParamList } from '../src/transform.js';
+import { convertGenerics, splitTopLevel, extractParamList, hasTrailingLineComment } from '../src/transform.js';
 
 describe('convertGenerics — the {} disambiguation rule', () => {
     const table = [
@@ -98,5 +98,23 @@ describe('extractParamList — the (...) group immediately followed by =>', () =
 
     it('returns null for a plain type', () => {
         expect(extractParamList('number')).toBeNull();
+    });
+});
+
+describe('hasTrailingLineComment — the auto-annotate quick fix guard', () => {
+    it('detects a plain trailing comment', () => {
+        expect(hasTrailingLineComment('let i = 0; // note')).toBe(true);
+    });
+
+    it('detects a // T: comment too (any comment counts, not just ety ones)', () => {
+        expect(hasTrailingLineComment('let i = 0; // T: number')).toBe(true);
+    });
+
+    it('returns false for a line with no comment', () => {
+        expect(hasTrailingLineComment('let i = 0;')).toBe(false);
+    });
+
+    it('ignores a // sequence inside a string literal', () => {
+        expect(hasTrailingLineComment('let u = "http://example.com";')).toBe(false);
     });
 });
