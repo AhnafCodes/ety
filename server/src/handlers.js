@@ -292,16 +292,20 @@ export function onHover(state, deps, { textDocument, position }) {
     };
 }
 
-// Completion requests arrive in ORIGINAL coordinates. We offer exactly one kind
-// of suggestion: when the cursor sits inside a `// T:` payload and the governed
-// binding's inferred type is a primitive, suggest that primitive.
+// Completion requests arrive in ORIGINAL coordinates. Two kinds of suggestion,
+// mutually exclusive by cursor position:
 //
-// The empty `// T:` the user is mid-typing renders `/** @type {} */`, which
-// degrades the BINDING to `any` in the virtual doc (measured). So we never read
-// the binding's type — we read the INITIALIZER expression's type, which the
-// empty annotation does not touch, and widen its literal (0 -> number). Anything
-// outside BASE_TYPES yields nothing: this is deliberately a sliver, not general
-// completion (implementation-plan.md, Milestone 9).
+// 1. Cursor inside an already-typed `// T:` payload (Milestone 9): suggest the
+//    governed binding's inferred primitive. The empty `// T:` the user is
+//    mid-typing renders `/** @type {} */`, which degrades the BINDING to `any`
+//    in the virtual doc (measured). So we never read the binding's type — we
+//    read the INITIALIZER expression's type, which the empty annotation does
+//    not touch, and widen its literal (0 -> number). Anything outside
+//    BASE_TYPES yields nothing: this is deliberately a sliver, not general
+//    completion.
+// 2. Cursor just after a line's trailing ';' with NO annotation yet: the
+//    auto-annotate completion (below), sharing onCodeAction's suggestion logic
+//    and its state.autoAnnotate flag.
 export function onCompletion(state, deps, { textDocument, position }) {
     const path = resolvePath(state, textDocument.uri);
     const entry = state.lineMaps.get(path);
@@ -317,43 +321,139 @@ export function onCompletion(state, deps, { textDocument, position }) {
         && k.commentRange.start.line === position.line
         && position.character >= k.commentRange.start.character
         && position.character <= k.commentRange.end.character);
-    if (!inPayload) return [];
 
-    const virtualLine = oToV.get(position.line);
-    if (virtualLine === undefined) return [];
+    if (inPayload) {
+        const virtualLine = oToV.get(position.line);
+        if (virtualLine === undefined) return [];
 
-    // Stubbed services in unit tests don't expose getProgram; only the real TS
-    // host can answer inference, which is exactly what this feature needs.
+        // Stubbed services in unit tests don't expose getProgram; only the real
+        // TS host can answer inference, which is exactly what this feature needs.
+        const program = deps.tsService.getProgram?.();
+        const sourceFile = program?.getSourceFile(path);
+        if (!sourceFile) return [];
+        const checker = program.getTypeChecker();
+
+        // The binding governed by this annotation lives on the cursor's virtual
+        // code line. Find that VariableDeclaration and read its initializer's
+        // widened type — the empty `@type {}` poisons the binding, never the
+        // initializer.
+        const lineStart = lineIndex.getOffset(virtualLine, 0);
+        const nextStart = lineIndex.lineStarts[virtualLine + 1];
+        const lineEnd = nextStart ?? Number.MAX_SAFE_INTEGER;
+
+        let item = null;
+        // Return true to short-circuit: ts.forEachChild only stops descending
+        // when the callback returns a truthy value, so propagate it up the
+        // recursion to halt the moment the governed binding is found.
+        const visit = node => {
+            if (ts.isVariableDeclaration(node) && node.initializer) {
+                const nameStart = node.name.getStart(sourceFile);
+                if (nameStart >= lineStart && nameStart < lineEnd) {
+                    const type = checker.getBaseTypeOfLiteralType(checker.getTypeAtLocation(node.initializer));
+                    item = inferEtyCompletion(type, node.initializer, checker);
+                    return true;
+                }
+            }
+            return ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+
+        return item ? [item] : [];
+    }
+
+    // Auto-annotate completion — the same feature as onCodeAction's quick fix,
+    // gated by the same state.autoAnnotate flag, reusing the same suggestion
+    // logic. Triggered by typing ';' at the end of an un-annotated variable
+    // declaration, so the completion widget offers "// T: <type>" right there
+    // and Tab (or Enter) commits it inline, without opening the lightbulb menu.
+    if (!state.autoAnnotate) return [];
+    const document = deps.documents?.get(textDocument.uri);
+    if (!document) return [];
+
+    // Only offer this when the cursor sits right after the line's trailing ';'
+    // (trailing whitespace tolerated) — not mid-statement and not already past
+    // other trailing content.
+    const textBeforeCursor = document.getText({
+        start: { line: position.line, character: 0 },
+        end: position,
+    });
+    if (!textBeforeCursor.trimEnd().endsWith(';')) return [];
+
     const program = deps.tsService.getProgram?.();
     const sourceFile = program?.getSourceFile(path);
     if (!sourceFile) return [];
     const checker = program.getTypeChecker();
 
-    // The binding governed by this annotation lives on the cursor's virtual code
-    // line. Find that VariableDeclaration and read its initializer's widened
-    // type — the empty `@type {}` poisons the binding, never the initializer.
+    const suggestion = findAutoAnnotateSuggestion(entry, position.line, sourceFile, checker, document);
+    if (!suggestion) return [];
+
+    return [{
+        label: `// T: ${suggestion.label}`,
+        kind: CompletionItemKind.Snippet,
+        insertText: ` // T: ${suggestion.label}`,
+        detail: 'ety: insert the inferred type annotation',
+    }];
+}
+
+// Shared by onCodeAction and the ';'-triggered completion in onCompletion
+// below: resolve the auto-annotate suggestion for a single ORIGINAL line, or
+// null when none applies — already annotated/ignored, not a single-declarator
+// VariableStatement with an initializer, a line with an existing trailing
+// comment, or an inferred type outside inferEtyCompletion's closed set. Both
+// call sites gate on state.autoAnnotate themselves before calling in.
+function findAutoAnnotateSuggestion(entry, originalLine, sourceFile, checker, document) {
+    const { oToV, lineIndex } = entry;
+    const ignoredLines = entry.ignoredLines ?? new Set();
+    const annotatedLines = entry.annotatedLines ?? new Set();
+    if (annotatedLines.has(originalLine) || ignoredLines.has(originalLine)) return null;
+    const virtualLine = oToV.get(originalLine);
+    if (virtualLine === undefined) return null; // an injected line has no original code to annotate
+
     const lineStart = lineIndex.getOffset(virtualLine, 0);
     const nextStart = lineIndex.lineStarts[virtualLine + 1];
     const lineEnd = nextStart ?? Number.MAX_SAFE_INTEGER;
 
-    let item = null;
-    // Return true to short-circuit: ts.forEachChild only stops descending when
-    // the callback returns a truthy value, so propagate it up the recursion to
-    // halt the moment the governed binding is found.
+    // A VariableStatement (`let`/`const`/`var ...;`) whose declaration list
+    // starts on this virtual line, with exactly one declarator. Multi-
+    // declarator lines (`let x = 1, y = 2;`) are skipped — the annotation
+    // covers the whole statement, so which declarator's type it should
+    // describe is ambiguous; manual annotation stays the way to cover those.
+    // A for-loop's `let i = 0` is NOT a VariableStatement (its declaration
+    // list hangs directly off the ForStatement), so loop headers are
+    // excluded too — intentionally out of scope for this feature.
+    let decl = null;
     const visit = node => {
-        if (ts.isVariableDeclaration(node) && node.initializer) {
-            const nameStart = node.name.getStart(sourceFile);
-            if (nameStart >= lineStart && nameStart < lineEnd) {
-                const type = checker.getBaseTypeOfLiteralType(checker.getTypeAtLocation(node.initializer));
-                item = inferEtyCompletion(type, node.initializer, checker);
-                return true;
+        if (ts.isVariableStatement(node)) {
+            const list = node.declarationList;
+            const listStart = list.getStart(sourceFile);
+            if (listStart >= lineStart && listStart < lineEnd && list.declarations.length === 1) {
+                const only = list.declarations[0];
+                if (only.initializer) decl = only;
             }
+            return;
         }
         return ts.forEachChild(node, visit);
     };
     visit(sourceFile);
+    if (!decl) return null;
 
-    return item ? [item] : [];
+    const rawLineText = document.getText({
+        start: { line: originalLine, character: 0 },
+        end: { line: originalLine, character: Number.MAX_SAFE_INTEGER },
+    });
+    const lineText = rawLineText.replace(/\r?\n$/, '');
+    // Appending `// T: <type>` after an EXISTING trailing comment of any
+    // kind would land inside that comment's own text (the Rust extractor
+    // reads a whole line comment as one span) and never be recognized as
+    // a type annotation — so skip rather than produce a silently broken
+    // insertion the user would have to notice and fix themselves.
+    if (hasTrailingLineComment(lineText)) return null;
+
+    const type = checker.getBaseTypeOfLiteralType(checker.getTypeAtLocation(decl.initializer));
+    const item = inferEtyCompletion(type, decl.initializer, checker);
+    if (!item) return null;
+
+    return { label: item.label, lineLength: lineText.length };
 }
 
 // Code actions arrive in ORIGINAL coordinates (params.range). We offer exactly
@@ -367,9 +467,7 @@ export function onCodeAction(state, deps, { textDocument, range }) {
     const path = resolvePath(state, textDocument.uri);
     const entry = state.lineMaps.get(path);
     if (!entry) return []; // not yet processed, or closed (race guard)
-    const { oToV, lineIndex, uri } = entry;
-    const ignoredLines = entry.ignoredLines ?? new Set();
-    const annotatedLines = entry.annotatedLines ?? new Set();
+    const { uri } = entry;
 
     // Stubbed services in unit tests don't expose getProgram; only the real TS
     // host can answer inference, which is exactly what this feature needs.
@@ -385,61 +483,16 @@ export function onCodeAction(state, deps, { textDocument, range }) {
 
     const actions = [];
     for (let originalLine = range.start.line; originalLine <= range.end.line; originalLine++) {
-        if (annotatedLines.has(originalLine) || ignoredLines.has(originalLine)) continue;
-        const virtualLine = oToV.get(originalLine);
-        if (virtualLine === undefined) continue; // an injected line has no original code to annotate
+        const suggestion = findAutoAnnotateSuggestion(entry, originalLine, sourceFile, checker, document);
+        if (!suggestion) continue;
 
-        const lineStart = lineIndex.getOffset(virtualLine, 0);
-        const nextStart = lineIndex.lineStarts[virtualLine + 1];
-        const lineEnd = nextStart ?? Number.MAX_SAFE_INTEGER;
-
-        // A VariableStatement (`let`/`const`/`var ...;`) whose declaration list
-        // starts on this virtual line, with exactly one declarator. Multi-
-        // declarator lines (`let x = 1, y = 2;`) are skipped — the annotation
-        // covers the whole statement, so which declarator's type it should
-        // describe is ambiguous; manual annotation stays the way to cover those.
-        // A for-loop's `let i = 0` is NOT a VariableStatement (its declaration
-        // list hangs directly off the ForStatement), so loop headers are
-        // excluded too — intentionally out of scope for this quick fix.
-        let decl = null;
-        const visit = node => {
-            if (ts.isVariableStatement(node)) {
-                const list = node.declarationList;
-                const listStart = list.getStart(sourceFile);
-                if (listStart >= lineStart && listStart < lineEnd && list.declarations.length === 1) {
-                    const only = list.declarations[0];
-                    if (only.initializer) decl = only;
-                }
-                return;
-            }
-            return ts.forEachChild(node, visit);
-        };
-        visit(sourceFile);
-        if (!decl) continue;
-
-        const rawLineText = document.getText({
-            start: { line: originalLine, character: 0 },
-            end: { line: originalLine, character: Number.MAX_SAFE_INTEGER },
-        });
-        const lineText = rawLineText.replace(/\r?\n$/, '');
-        // Appending `// T: <type>` after an EXISTING trailing comment of any
-        // kind would land inside that comment's own text (the Rust extractor
-        // reads a whole line comment as one span) and never be recognized as
-        // a type annotation — so skip rather than produce a silently broken
-        // insertion the user would have to notice and fix themselves.
-        if (hasTrailingLineComment(lineText)) continue;
-
-        const type = checker.getBaseTypeOfLiteralType(checker.getTypeAtLocation(decl.initializer));
-        const item = inferEtyCompletion(type, decl.initializer, checker);
-        if (!item) continue;
-
-        const insertAt = { line: originalLine, character: lineText.length };
+        const insertAt = { line: originalLine, character: suggestion.lineLength };
         actions.push({
-            title: `Insert // T: ${item.label}`,
+            title: `Insert // T: ${suggestion.label}`,
             kind: CodeActionKind.QuickFix,
             edit: {
                 changes: {
-                    [uri]: [{ range: { start: insertAt, end: insertAt }, newText: ` // T: ${item.label}` }],
+                    [uri]: [{ range: { start: insertAt, end: insertAt }, newText: ` // T: ${suggestion.label}` }],
                 },
             },
         });

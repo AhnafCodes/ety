@@ -56,7 +56,12 @@ connection.onInitialize(params => {
             // (spec: "Deferred: Autocompletion") — that one needs intra-line
             // spoofing into the JSDoc block; this one reads an already-inferred
             // type and returns a whole token.
-            completionProvider: { triggerCharacters: [':'] },
+            //
+            // ';' is the auto-annotate completion's trigger: typing the semicolon
+            // that ends an un-annotated `let`/`const`/`var` statement offers
+            // "// T: <type>" inline (Tab/Enter commits it), the same suggestion
+            // and the same ety.autoAnnotate flag as the onCodeAction lightbulb.
+            completionProvider: { triggerCharacters: [':', ';'] },
             // The auto-annotate quick fix (onCodeAction): a lightbulb offering
             // "Insert // T: <type>" on an un-annotated variable declaration.
             codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },

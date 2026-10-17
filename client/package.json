@@ -31,7 +31,7 @@
         "ety.autoAnnotate": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Offer a Quick Fix (lightbulb) to insert the inferred `// T:` type comment on an un-annotated `let`/`const`/`var` declaration, e.g. `Insert // T: number` on `let i = 0;`. Only offered for the same closed set of types completion already suggests inside `// T:`. Set to `false` to turn this suggestion off."
+          "markdownDescription": "Offer to insert the inferred `// T:` type comment on an un-annotated `let`/`const`/`var` declaration, e.g. `let i = 0;` offers `// T: number` — both as a Quick Fix (lightbulb) and as a completion item right after typing the line's `;` (commit it with Tab or Enter). Only offered for the same closed set of types completion already suggests inside `// T:`. Set to `false` to turn this suggestion off."
         }
       }
     }

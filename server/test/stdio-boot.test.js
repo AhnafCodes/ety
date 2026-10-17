@@ -80,7 +80,9 @@ describe('stdio transport boot (JetBrains contract)', () => {
             expect(caps.textDocumentSync).toBeDefined();
             // Inference-driven base-type completion (Milestone 9) is advertised
             // with a ':' trigger; general type-name completion remains deferred.
-            expect(caps.completionProvider).toEqual({ triggerCharacters: [':'] });
+            // ';' is the auto-annotate completion's trigger (same feature as
+            // codeActionProvider below, offered inline instead of via lightbulb).
+            expect(caps.completionProvider).toEqual({ triggerCharacters: [':', ';'] });
         } finally {
             child.kill();
         }

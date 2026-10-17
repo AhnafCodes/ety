@@ -12,6 +12,7 @@
 // this milestone exists to force (implementation-plan.md, Milestone 9).
 import { describe, it, expect, vi } from 'vitest';
 import { CompletionItemKind, InsertTextFormat } from 'vscode-languageserver';
+import { TextDocument } from 'vscode-languageserver-textdocument';
 import { createState, processDocument, onCompletion } from '../src/handlers.js';
 import { createTsService } from '../src/tsHost.js';
 import { parse_ety } from '../src/parser.js';
@@ -19,21 +20,25 @@ import { parse_ety } from '../src/parser.js';
 const PATH = '/synthetic/doc.js';
 
 // Build real per-document state for `source`, then return a function that asks
-// for completions at a character on line 0 (original coordinates).
+// for completions at a character on line 0 (original coordinates). A real
+// TextDocument (not a bare stub) backs deps.documents, since the ';'-triggered
+// auto-annotate completion reads line text via document.getText(range).
 function realSetup(source) {
     const state = createState();
+    const doc = TextDocument.create(PATH, 'javascript', 1, source);
     const deps = {
         connection: { sendDiagnostics: vi.fn(), console: { error: vi.fn(), warn: vi.fn() } },
         parse_ety,
+        documents: { get: () => doc },
     };
     deps.tsService = createTsService({ virtualDocs: state.virtualDocs, versions: state.versions });
-    processDocument(state, deps, { uri: PATH, version: 1, getText: () => source });
-    const itemsAt = character => onCompletion(state, deps, {
+    processDocument(state, deps, doc);
+    const itemsAt = (character, line = 0) => onCompletion(state, deps, {
         textDocument: { uri: PATH },
-        position: { line: 0, character },
+        position: { line, character },
     }) ?? [];
-    const labelsAt = character => itemsAt(character).map(i => i.label);
-    return { labelsAt, itemsAt, source };
+    const labelsAt = (character, line = 0) => itemsAt(character, line).map(i => i.label);
+    return { state, labelsAt, itemsAt, source };
 }
 
 // Cursor just past the colon of `// T:` — where the user would start typing the
@@ -193,5 +198,60 @@ describe('onCompletion — inference through function & method return types (REA
     it('boundary: new Date() infers Date, a built-in off the curated table — stays silent', () => {
         const source = 'let d = new Date(); // T:\n';
         expect(realSetup(source).labelsAt(afterColon(source))).toHaveLength(0);
+    });
+});
+
+describe("onCompletion — auto-annotate completion triggered by ';' (REAL TS)", () => {
+    it('offers "// T: number" right after the trailing ; of an un-annotated declaration', () => {
+        const source = 'let i = 0;\n';
+        const items = realSetup(source).itemsAt(source.indexOf(';') + 1);
+        expect(items).toHaveLength(1);
+        expect(items[0].label).toBe('// T: number');
+        expect(items[0].insertText).toBe(' // T: number');
+        expect(items[0].kind).toBe(CompletionItemKind.Snippet);
+    });
+
+    it('reads the primitive from genuine inference, not a hardcoded number', () => {
+        const s = 'let s = "x";\n';
+        expect(realSetup(s).labelsAt(s.indexOf(';') + 1)).toEqual(['// T: string']);
+    });
+
+    it('offers a bare container skeleton, not the completion $0-snippet form', () => {
+        const source = 'let m = new Map();\n';
+        const items = realSetup(source).itemsAt(source.indexOf(';') + 1);
+        expect(items).toHaveLength(1);
+        expect(items[0].insertText).toBe(' // T: Map{}');
+    });
+
+    it('does not fire before the ;  (mid-statement)', () => {
+        const source = 'let i = 0;\n';
+        expect(realSetup(source).labelsAt(4)).toHaveLength(0); // char 4 = 'i'
+    });
+
+    it('does not fire on an already-annotated line', () => {
+        const source = 'let i = 0; // T: number\n';
+        expect(realSetup(source).labelsAt(source.indexOf(';') + 1)).toHaveLength(0);
+    });
+
+    it('does not fire on a line with an unrelated trailing comment', () => {
+        const source = 'let i = 0; // note\n';
+        expect(realSetup(source).labelsAt(source.indexOf(';') + 1)).toHaveLength(0);
+    });
+
+    it('excludes non-primitive, non-curated inferred types — the sliver stays a sliver', () => {
+        const source = 'let d = new Date();\n';
+        expect(realSetup(source).labelsAt(source.indexOf(';') + 1)).toHaveLength(0);
+    });
+
+    it('does not fire when state.autoAnnotate is false', () => {
+        const source = 'let i = 0;\n';
+        const { state, labelsAt } = realSetup(source);
+        state.autoAnnotate = false;
+        expect(labelsAt(source.indexOf(';') + 1)).toHaveLength(0);
+    });
+
+    it('does not fire on the for-loop header\'s first ; (not a VariableStatement)', () => {
+        const source = 'for (let i = 0; i < 10; i++) {}\n';
+        expect(realSetup(source).labelsAt(source.indexOf(';') + 1)).toHaveLength(0);
     });
 });
