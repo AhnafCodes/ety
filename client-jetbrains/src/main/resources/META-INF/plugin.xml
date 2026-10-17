@@ -31,5 +31,16 @@
     <extensions defaultExtensionNs="com.intellij">
         <platform.lsp.serverSupportProvider
             implementation="dev.ety.EtyLspServerSupportProvider"/>
+
+        <!-- Tab after `let i = 0;` appends the inferred `// T: <type>`; Tab
+             elsewhere falls through to the IDE's normal handler. -->
+        <editorActionHandler action="EditorTab"
+                             implementationClass="dev.ety.EtyTabAnnotateHandler"
+                             order="first"/>
+
+        <applicationConfigurable parentId="tools"
+                                 instance="dev.ety.EtyConfigurable"
+                                 id="dev.ety.settings"
+                                 displayName="ety"/>
     </extensions>
 </idea-plugin>

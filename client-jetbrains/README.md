@@ -18,10 +18,13 @@ client-jetbrains/
 ├── src/main/
 │   ├── kotlin/dev/ety/
 │   │   ├── EtyLspServerSupportProvider.kt   # entry point; starts the server for .js/.jsx
-│   │   └── EtyLspServerDescriptor.kt         # spawns `node server/src/main.js --stdio`
+│   │   ├── EtyLspServerDescriptor.kt         # spawns `node server/src/main.js --stdio`
+│   │   ├── EtyTabAnnotate.kt                 # Tab after `let i = 0;` → `// T: number`
+│   │   └── EtySettings.kt                    # Settings > Tools > ety (on/off flag)
 │   └── resources/META-INF/plugin.xml         # depends: platform + lsp + ultimate
 └── src/test/kotlin/dev/ety/
-    └── EtyLspServerDescriptorTest.kt          # smoke test: file claim + launch command
+    ├── EtyLspServerDescriptorTest.kt          # smoke test: file claim + launch command
+    └── EtyTabAnnotateTest.kt                  # Tab-to-annotate trigger + flag
 ```
 
 This module is **outside** the npm workspace — it's a JVM/Gradle build and does
@@ -50,6 +53,27 @@ container without that toolchain.
 In the dev IDE, open a `.js`/`.jsx` file with a `// T:` annotation: a deliberate
 type error squiggles the correct original line, and hovering an annotated symbol
 shows its resolved type.
+
+## Tab-to-annotate
+
+Type a declaration, end it with `;`, and press **Tab** with the caret right
+after the `;`:
+
+```js
+let i = 0;⇥        →   let i = 0; // T: number
+const s = 'hi';⇥   →   const s = 'hi'; // T: string
+```
+
+The type comes from the server's "Insert // T: <type>" quick fix, so the same
+rules apply: one declarator per line, no existing trailing comment, and only
+types the server can name confidently. If there's no suggestion, Tab inserts
+its usual indent. It never fires while a completion popup or live template is
+active. One Undo removes the inserted comment.
+
+Turn it off in **Settings > Tools > ety** (uncheck *Insert // T: <type> when
+pressing Tab after ';'*), or start the IDE with `ETY_TAB_ANNOTATE=false`.
+`ETY_AUTO_ANNOTATE=false` turns off the server-side quick fix, which disables
+this too.
 
 ## Packaging — what `buildPlugin` bundles
 

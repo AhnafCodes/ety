@@ -53,7 +53,4 @@ internal fun scriptHosts(): List<String> {
  * value, including unset, keeps it on. A full Settings UI is a documented
  * follow-up, same as scriptHosts().
  */
-internal fun autoAnnotate(): Boolean {
-    val raw = System.getenv("ETY_AUTO_ANNOTATE")?.trim()?.lowercase()
-    return raw != "false" && raw != "0"
-}
+internal fun autoAnnotate(): Boolean = envAllows("ETY_AUTO_ANNOTATE")
