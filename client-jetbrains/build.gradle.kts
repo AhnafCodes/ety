@@ -46,6 +46,16 @@ dependencies {
 }
 
 intellijPlatform {
+    // The Ant-based instrumentCode task runs inside the Gradle daemon's own JVM
+    // (not the kotlin{} toolchain) and hits a known IntelliJ Platform Gradle
+    // Plugin bug resolving a "Packages" path under any plain JDK's Contents/Home
+    // on this machine (https://github.com/JetBrains/gradle-intellij-plugin/issues/1240,
+    // https://github.com/intellij-dlanguage/intellij-dlanguage/issues/652).
+    // Instrumentation only matters for Swing GUI Designer .form files, and this
+    // plugin has none (it's plumbing-only Kotlin, same charter as client/), so
+    // disabling it entirely is safe rather than fighting the JDK resolution bug.
+    instrumentCode = false
+
     pluginConfiguration {
         ideaVersion {
             // 2025.3 = the unified release that opened the LSP API to all tiers.
@@ -55,11 +65,10 @@ intellijPlatform {
 }
 
 kotlin {
-    // Build runs on JDK 25 (the installed JDK), but the plugin must load inside
-    // IDEA 2025.3, which runs on JBR 21 — a Java 21 runtime cannot load Java 25
-    // bytecode. So compile ON 25 yet TARGET 21. The IJ plugin's config verifier
-    // also expects a 21 target for the 2025.3 platform.
-    jvmToolchain(25)
+    jvmToolchain {
+        languageVersion.set(JavaLanguageVersion.of(17)) // or 21
+        vendor.set(JvmVendorSpec.JETBRAINS)
+    }
 }
 
 // Pin the bytecode target to 21 at the task level. Setting it on the `kotlin {}`
